@@ -6,12 +6,13 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 
 Currently implemented:
 - `get_pull_request` - Retrieve detailed information about a pull request
+- `list_pull_requests` - List pull requests with filters (state, author, pagination)
 
 Planned features:
 - `create_pull_request` - Create new pull requests
-- `list_pull_requests` - List pull requests with filters
 - `update_pull_request` - Update PR details
 - `merge_pull_request` - Merge pull requests
+- `delete_branch` - Delete branches
 - And more...
 
 ## Installation
@@ -116,6 +117,27 @@ Returns detailed information about the pull request including:
 - Approval status
 - Links to web UI and diff
 - And more...
+
+### List Pull Requests
+
+```typescript
+{
+  "tool": "list_pull_requests",
+  "arguments": {
+    "workspace": "PROJ",  // Required - your project key
+    "repository": "my-repo",
+    "state": "OPEN",  // Optional: OPEN, MERGED, DECLINED, ALL (default: OPEN)
+    "author": "username",  // Optional: filter by author
+    "limit": 25,  // Optional: max results per page (default: 25)
+    "start": 0  // Optional: pagination start index (default: 0)
+  }
+}
+```
+
+Returns a paginated list of pull requests with:
+- Array of pull requests with same details as get_pull_request
+- Total count of matching PRs
+- Pagination info (has_more, next_start)
 
 ## Development
 
