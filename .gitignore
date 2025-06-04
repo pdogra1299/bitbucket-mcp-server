@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build output
+build/
+dist/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test files
+test-api.js
+*.test.js
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Personal configuration
+RELOAD_INSTRUCTIONS.md
+personal-notes.md
