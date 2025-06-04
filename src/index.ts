@@ -251,6 +251,7 @@ class BitbucketMCPServer {
       is_open: pr.open,
       is_closed: pr.closed,
       author: pr.author.user.displayName,
+      author_username: pr.author.user.name,
       author_email: pr.author.user.emailAddress,
       source_branch: pr.fromRef.displayId,
       destination_branch: pr.toRef.displayId,
@@ -486,7 +487,9 @@ class BitbucketMCPServer {
           start,
         };
         if (author) {
-          params['username'] = author;
+          // Use role.1=AUTHOR and username.1=author to filter by author
+          params['role.1'] = 'AUTHOR';
+          params['username.1'] = author;
         }
       } else {
         // Bitbucket Cloud API
