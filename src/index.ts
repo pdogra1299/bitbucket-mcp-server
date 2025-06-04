@@ -169,6 +169,25 @@ const isGetPullRequestArgs = (
   typeof args.repository === 'string' &&
   typeof args.pull_request_id === 'number';
 
+const isListPullRequestsArgs = (
+  args: any
+): args is { 
+  workspace: string; 
+  repository: string; 
+  state?: string; 
+  author?: string;
+  limit?: number;
+  start?: number;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  (args.state === undefined || typeof args.state === 'string') &&
+  (args.author === undefined || typeof args.author === 'string') &&
+  (args.limit === undefined || typeof args.limit === 'number') &&
+  (args.start === undefined || typeof args.start === 'number');
+
 class BitbucketMCPServer {
   private server: Server;
   private axiosInstance: AxiosInstance;
@@ -232,6 +251,7 @@ class BitbucketMCPServer {
       is_open: pr.open,
       is_closed: pr.closed,
       author: pr.author.user.displayName,
+      author_username: pr.author.user.name,
       author_email: pr.author.user.emailAddress,
       source_branch: pr.fromRef.displayId,
       destination_branch: pr.toRef.displayId,
@@ -295,7 +315,7 @@ class BitbucketMCPServer {
             properties: {
               workspace: {
                 type: 'string',
-                description: 'Bitbucket workspace/project key (e.g., "JBIZ")',
+                description: 'Bitbucket workspace/project key (e.g., "PROJ")',
               },
               repository: {
                 type: 'string',
@@ -309,26 +329,69 @@ class BitbucketMCPServer {
             required: ['workspace', 'repository', 'pull_request_id'],
           },
         },
+        {
+          name: 'list_pull_requests',
+          description: 'List pull requests for a repository with optional filters',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              workspace: {
+                type: 'string',
+                description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+              },
+              repository: {
+                type: 'string',
+                description: 'Repository slug (e.g., "my-repo")',
+              },
+              state: {
+                type: 'string',
+                description: 'Filter by PR state: OPEN, MERGED, DECLINED, ALL (default: OPEN)',
+                enum: ['OPEN', 'MERGED', 'DECLINED', 'ALL'],
+              },
+              author: {
+                type: 'string',
+                description: 'Filter by author username',
+              },
+              limit: {
+                type: 'number',
+                description: 'Maximum number of PRs to return (default: 25)',
+              },
+              start: {
+                type: 'number',
+                description: 'Start index for pagination (default: 0)',
+              },
+            },
+            required: ['workspace', 'repository'],
+          },
+        },
       ],
     }));
 
     // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name !== 'get_pull_request') {
-        throw new McpError(
-          ErrorCode.MethodNotFound,
-          `Unknown tool: ${request.params.name}`
-        );
+      switch (request.params.name) {
+        case 'get_pull_request':
+          return this.handleGetPullRequest(request.params.arguments);
+        case 'list_pull_requests':
+          return this.handleListPullRequests(request.params.arguments);
+        default:
+          throw new McpError(
+            ErrorCode.MethodNotFound,
+            `Unknown tool: ${request.params.name}`
+          );
       }
+    });
+  }
 
-      if (!isGetPullRequestArgs(request.params.arguments)) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          'Invalid arguments for get_pull_request'
-        );
-      }
+  private async handleGetPullRequest(args: any) {
+    if (!isGetPullRequestArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for get_pull_request'
+      );
+    }
 
-      const { workspace, repository, pull_request_id } = request.params.arguments;
+    const { workspace, repository, pull_request_id } = args;
 
       try {
         // Different API paths for Server vs Cloud
@@ -399,7 +462,139 @@ class BitbucketMCPServer {
         }
         throw error;
       }
-    });
+  }
+
+  private async handleListPullRequests(args: any) {
+    if (!isListPullRequestsArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for list_pull_requests'
+      );
+    }
+
+    const { workspace, repository, state = 'OPEN', author, limit = 25, start = 0 } = args;
+
+    try {
+      let apiPath: string;
+      let params: any = {};
+
+      if (this.isServer) {
+        // Bitbucket Server API
+        apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests`;
+        params = {
+          state: state === 'ALL' ? undefined : state,
+          limit,
+          start,
+        };
+        if (author) {
+          // Use role.1=AUTHOR and username.1=author to filter by author
+          params['role.1'] = 'AUTHOR';
+          params['username.1'] = author;
+        }
+      } else {
+        // Bitbucket Cloud API
+        apiPath = `/repositories/${workspace}/${repository}/pullrequests`;
+        params = {
+          state: state === 'ALL' ? undefined : state,
+          pagelen: limit,
+          page: Math.floor(start / limit) + 1,
+        };
+        if (author) {
+          params['q'] = `author.username="${author}"`;
+        }
+      }
+
+      console.error(`[DEBUG] Listing PRs from: ${BITBUCKET_BASE_URL}${apiPath}`);
+      console.error(`[DEBUG] Params:`, params);
+
+      const response = await this.axiosInstance.get(apiPath, { params });
+      const data = response.data;
+
+      // Format the response
+      let pullRequests: any[] = [];
+      let totalCount = 0;
+      let nextPageStart = null;
+
+      if (this.isServer) {
+        // Bitbucket Server response
+        pullRequests = (data.values || []).map((pr: BitbucketServerPullRequest) => 
+          this.formatServerResponse(pr)
+        );
+        totalCount = data.size || 0;
+        if (!data.isLastPage && data.nextPageStart !== undefined) {
+          nextPageStart = data.nextPageStart;
+        }
+      } else {
+        // Bitbucket Cloud response
+        pullRequests = (data.values || []).map((pr: BitbucketCloudPullRequest) => 
+          this.formatCloudResponse(pr)
+        );
+        totalCount = data.size || 0;
+        if (data.next) {
+          nextPageStart = start + limit;
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              pull_requests: pullRequests,
+              total_count: totalCount,
+              start,
+              limit,
+              has_more: nextPageStart !== null,
+              next_start: nextPageStart,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      if (axios.isAxiosError(error)) {
+        const status = error.response?.status;
+        const message = error.response?.data?.errors?.[0]?.message || 
+                       error.response?.data?.error?.message || 
+                       error.response?.data?.message ||
+                       error.message;
+
+        console.error(`[DEBUG] API Error: ${status} - ${message}`);
+        console.error(`[DEBUG] Full error response:`, error.response?.data);
+
+        if (status === 404) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Repository not found: ${workspace}/${repository}`,
+              },
+            ],
+            isError: true,
+          };
+        } else if (status === 401) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Authentication failed. Please check your ${this.isServer ? 'BITBUCKET_TOKEN' : 'BITBUCKET_USERNAME and BITBUCKET_APP_PASSWORD'}`,
+              },
+            ],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Bitbucket API error: ${message}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      throw error;
+    }
   }
 
   async run() {
