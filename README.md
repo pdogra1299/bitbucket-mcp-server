@@ -127,7 +127,7 @@ Returns detailed information about the pull request including:
     "workspace": "PROJ",  // Required - your project key
     "repository": "my-repo",
     "state": "OPEN",  // Optional: OPEN, MERGED, DECLINED, ALL (default: OPEN)
-    "author": "username",  // Optional: filter by author
+    "author": "username",  // Optional: filter by author (see note below)
     "limit": 25,  // Optional: max results per page (default: 25)
     "start": 0  // Optional: pagination start index (default: 0)
   }
@@ -138,6 +138,10 @@ Returns a paginated list of pull requests with:
 - Array of pull requests with same details as get_pull_request
 - Total count of matching PRs
 - Pagination info (has_more, next_start)
+
+**Note on Author Filter:**
+- For Bitbucket Cloud: Use the username (e.g., "johndoe")
+- For Bitbucket Server: Use the full email address (e.g., "john.doe@company.com")
 
 ## Development
 
