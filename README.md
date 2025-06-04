@@ -1,6 +1,9 @@
 # Bitbucket MCP Server
 
-An MCP (Model Context Protocol) server that provides tools for interacting with the Bitbucket API.
+[![npm version](https://badge.fury.io/js/@nexus2520%2Fbitbucket-mcp-server.svg)](https://www.npmjs.com/package/@nexus2520/bitbucket-mcp-server)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+An MCP (Model Context Protocol) server that provides tools for interacting with the Bitbucket API, supporting both Bitbucket Cloud and Bitbucket Server.
 
 ## Features
 
@@ -23,6 +26,50 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 - `remove_requested_changes` - Remove change request from a pull request
 
 ## Installation
+
+### Using npx (Recommended)
+
+The easiest way to use this MCP server is directly with npx:
+
+```json
+{
+  "mcpServers": {
+    "bitbucket": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@nexus2520/bitbucket-mcp-server"
+      ],
+      "env": {
+        "BITBUCKET_USERNAME": "your-username",
+        "BITBUCKET_APP_PASSWORD": "your-app-password"
+      }
+    }
+  }
+}
+```
+
+For Bitbucket Server:
+```json
+{
+  "mcpServers": {
+    "bitbucket": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@nexus2520/bitbucket-mcp-server"
+      ],
+      "env": {
+        "BITBUCKET_USERNAME": "your.email@company.com",
+        "BITBUCKET_TOKEN": "your-http-access-token",
+        "BITBUCKET_BASE_URL": "https://bitbucket.yourcompany.com"
+      }
+    }
+  }
+}
+```
+
+### From Source
 
 1. Clone or download this repository
 2. Install dependencies:

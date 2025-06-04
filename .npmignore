@@ -1,0 +1,48 @@
+# Source files
+src/
+*.ts
+!*.d.ts
+
+# Development files
+.gitignore
+tsconfig.json
+.vscode/
+.idea/
+
+# Test files
+test/
+*.test.js
+*.spec.js
+
+# Build artifacts
+*.log
+node_modules/
+.npm/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+
+# Documentation source
+docs/
+
+# Scripts (except built ones)
+scripts/
+
+# Setup guides (keep README)
+SETUP_GUIDE.md
+SETUP_GUIDE_SERVER.md
+
+# Git
+.git/
+.gitattributes
+
+# Other
+.env
+.env.local
+.env.*.local

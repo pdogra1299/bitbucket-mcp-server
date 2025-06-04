@@ -1,17 +1,47 @@
 {
-  "name": "bitbucket-mcp-server",
+  "name": "@nexus2520/bitbucket-mcp-server",
   "version": "0.2.0",
-  "description": "MCP server for Bitbucket API integration",
+  "description": "MCP server for Bitbucket API integration - supports both Cloud and Server",
   "type": "module",
   "main": "./build/index.js",
+  "bin": {
+    "bitbucket-mcp-server": "./build/index.js"
+  },
+  "files": [
+    "build/**/*",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
     "dev": "tsc --watch",
-    "start": "node build/index.js"
+    "start": "node build/index.js",
+    "prepublishOnly": "npm run build"
   },
-  "keywords": ["mcp", "bitbucket", "api"],
-  "author": "",
+  "keywords": [
+    "mcp",
+    "bitbucket",
+    "api",
+    "model-context-protocol",
+    "bitbucket-server",
+    "bitbucket-cloud",
+    "pull-request",
+    "code-review"
+  ],
+  "author": "Parth Dogra",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://git.pratiknarola.com/Pdogra/bitbucket-mcp-server"
+  },
+  "bugs": {
+    "url": "https://git.pratiknarola.com/Pdogra/bitbucket-mcp-server/issues"
+  },
+  "homepage": "https://git.pratiknarola.com/Pdogra/bitbucket-mcp-server#readme",
+  "engines": {
+    "node": ">=16.0.0"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "axios": "^1.9.0"
