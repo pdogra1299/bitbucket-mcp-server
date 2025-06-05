@@ -174,6 +174,11 @@ Returns detailed information about the pull request including:
 - Source and destination branches
 - Approval status
 - Links to web UI and diff
+- **Merge commit details** (when PR is merged):
+  - `merge_commit_hash`: The hash of the merge commit
+  - `merged_by`: Who performed the merge
+  - `merged_at`: When the merge occurred
+  - `merge_commit_message`: The merge commit message
 - And more...
 
 ### List Pull Requests
