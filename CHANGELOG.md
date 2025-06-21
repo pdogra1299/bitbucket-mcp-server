@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2025-01-21
+
+### Added
+- **New `get_branch` tool for comprehensive branch information**:
+  - Returns detailed branch information including name, ID, and latest commit details
+  - Lists all open pull requests originating from the branch with approval status
+  - Optionally includes merged pull requests when `include_merged_prs` is true
+  - Provides useful statistics like PR counts and days since last commit
+  - Supports both Bitbucket Server and Cloud APIs
+  - Particularly useful for checking if a branch has open PRs before deletion
+- Added TypeScript interfaces for `BitbucketServerBranch` and `BitbucketCloudBranch`
+- Added type guard `isGetBranchArgs` for input validation
+
+### Changed
+- Updated documentation to include the new `get_branch` tool with comprehensive examples
+
 ## [0.3.0] - 2025-01-06
 
 ### Added
