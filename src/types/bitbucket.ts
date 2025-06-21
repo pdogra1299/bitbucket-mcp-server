@@ -95,6 +95,26 @@ export interface BitbucketServerActivity {
   };
 }
 
+// Bitbucket Server Branch types
+export interface BitbucketServerBranch {
+  id: string;
+  displayId: string;
+  type: string;
+  latestCommit: string;
+  latestChangeset: string;
+  isDefault: boolean;
+  metadata?: {
+    "com.atlassian.bitbucket.server.bitbucket-branch:latest-commit-metadata": {
+      author: {
+        name: string;
+        emailAddress: string;
+      };
+      authorTimestamp: number;
+      message: string;
+    };
+  };
+}
+
 // Bitbucket Cloud API response types
 export interface BitbucketCloudPullRequest {
   id: number;
@@ -154,6 +174,25 @@ export interface BitbucketCloudPullRequest {
     display_name: string;
     account_id: string;
   };
+}
+
+// Bitbucket Cloud Branch types
+export interface BitbucketCloudBranch {
+  name: string;
+  target: {
+    hash: string;
+    type: string;
+    message: string;
+    author: {
+      raw: string;
+      user?: {
+        display_name: string;
+        account_id: string;
+      };
+    };
+    date: string;
+  };
+  type: string;
 }
 
 // Merge info type for enhanced PR details

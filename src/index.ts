@@ -102,6 +102,8 @@ class BitbucketMCPServer {
           return this.branchHandlers.handleListBranches(request.params.arguments);
         case 'delete_branch':
           return this.branchHandlers.handleDeleteBranch(request.params.arguments);
+        case 'get_branch':
+          return this.branchHandlers.handleGetBranch(request.params.arguments);
         
         // Code Review tools
         case 'get_pull_request_diff':

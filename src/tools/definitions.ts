@@ -390,4 +390,30 @@ export const toolDefinitions = [
       required: ['workspace', 'repository', 'pull_request_id'],
     },
   },
+  {
+    name: 'get_branch',
+    description: 'Get detailed information about a branch including associated pull requests',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        branch_name: {
+          type: 'string',
+          description: 'Branch name to get details for',
+        },
+        include_merged_prs: {
+          type: 'boolean',
+          description: 'Include merged PRs from this branch (default: false)',
+        },
+      },
+      required: ['workspace', 'repository', 'branch_name'],
+    },
+  },
 ];

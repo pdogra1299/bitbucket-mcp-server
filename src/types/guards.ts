@@ -187,3 +187,18 @@ export const isRequestChangesArgs = (
   typeof args.repository === 'string' &&
   typeof args.pull_request_id === 'number' &&
   (args.comment === undefined || typeof args.comment === 'string');
+
+export const isGetBranchArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  branch_name: string;
+  include_merged_prs?: boolean;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.branch_name === 'string' &&
+  (args.include_merged_prs === undefined || typeof args.include_merged_prs === 'boolean');

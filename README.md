@@ -18,6 +18,11 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 - `merge_pull_request` - Merge pull requests with various strategies
 - `delete_branch` - Delete branches after merge
 
+#### Branch Management Tools
+- `list_branches` - List branches with filtering and pagination
+- `delete_branch` - Delete branches (with protection checks)
+- `get_branch` - Get detailed branch information including associated PRs
+
 #### Code Review Tools
 - `get_pull_request_diff` - Get the diff/changes for a pull request
 - `approve_pull_request` - Approve a pull request
@@ -333,6 +338,45 @@ Returns a paginated list of branches with:
 ```
 
 **Note**: Branch deletion requires appropriate permissions. The branch will be permanently deleted.
+
+### Get Branch
+
+```typescript
+{
+  "tool": "get_branch",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "branch_name": "feature/new-feature",
+    "include_merged_prs": false  // Optional (default: false)
+  }
+}
+```
+
+Returns comprehensive branch information including:
+- Branch details:
+  - Name and ID
+  - Latest commit (hash, message, author, date)
+  - Default branch indicator
+- Open pull requests from this branch:
+  - PR title and ID
+  - Destination branch
+  - Author and reviewers
+  - Approval status (approved by, changes requested by, pending)
+  - PR URL
+- Merged pull requests (if `include_merged_prs` is true):
+  - PR title and ID
+  - Merge date and who merged it
+- Statistics:
+  - Total open PRs count
+  - Total merged PRs count
+  - Days since last commit
+
+This tool is particularly useful for:
+- Checking if a branch has open PRs before deletion
+- Getting an overview of branch activity
+- Understanding PR review status
+- Identifying stale branches
 
 ### Get Pull Request Diff
 
