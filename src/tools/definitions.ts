@@ -416,4 +416,68 @@ export const toolDefinitions = [
       required: ['workspace', 'repository', 'branch_name'],
     },
   },
+  {
+    name: 'list_directory_content',
+    description: 'List files and directories in a repository path',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        path: {
+          type: 'string',
+          description: 'Directory path (optional, defaults to root, e.g., "src/components")',
+        },
+        branch: {
+          type: 'string',
+          description: 'Branch name (optional, defaults to default branch)',
+        },
+      },
+      required: ['workspace', 'repository'],
+    },
+  },
+  {
+    name: 'get_file_content',
+    description: 'Get file content from a repository with smart truncation for large files',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        file_path: {
+          type: 'string',
+          description: 'Path to the file (e.g., "src/index.ts")',
+        },
+        branch: {
+          type: 'string',
+          description: 'Branch name (optional, defaults to default branch)',
+        },
+        start_line: {
+          type: 'number',
+          description: 'Starting line number (1-based). Use negative for lines from end (optional)',
+        },
+        line_count: {
+          type: 'number',
+          description: 'Number of lines to return (optional, default varies by file size)',
+        },
+        full_content: {
+          type: 'boolean',
+          description: 'Force return full content regardless of size (optional, default: false)',
+        },
+      },
+      required: ['workspace', 'repository', 'file_path'],
+    },
+  },
 ];

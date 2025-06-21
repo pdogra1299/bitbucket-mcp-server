@@ -202,3 +202,39 @@ export const isGetBranchArgs = (
   typeof args.repository === 'string' &&
   typeof args.branch_name === 'string' &&
   (args.include_merged_prs === undefined || typeof args.include_merged_prs === 'boolean');
+
+export const isListDirectoryContentArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  path?: string;
+  branch?: string;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  (args.path === undefined || typeof args.path === 'string') &&
+  (args.branch === undefined || typeof args.branch === 'string');
+
+export const isGetFileContentArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  file_path: string;
+  branch?: string;
+  start_line?: number;
+  line_count?: number;
+  full_content?: boolean;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.file_path === 'string' &&
+  (args.branch === undefined || typeof args.branch === 'string') &&
+  (args.start_line === undefined || typeof args.start_line === 'number') &&
+  (args.line_count === undefined || typeof args.line_count === 'number') &&
+  (args.full_content === undefined || typeof args.full_content === 'boolean');

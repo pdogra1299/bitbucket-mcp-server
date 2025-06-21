@@ -12,6 +12,7 @@ import { BitbucketApiClient } from './utils/api-client.js';
 import { PullRequestHandlers } from './handlers/pull-request-handlers.js';
 import { BranchHandlers } from './handlers/branch-handlers.js';
 import { ReviewHandlers } from './handlers/review-handlers.js';
+import { FileHandlers } from './handlers/file-handlers.js';
 import { toolDefinitions } from './tools/definitions.js';
 
 // Get environment variables
@@ -33,12 +34,13 @@ class BitbucketMCPServer {
   private pullRequestHandlers: PullRequestHandlers;
   private branchHandlers: BranchHandlers;
   private reviewHandlers: ReviewHandlers;
+  private fileHandlers: FileHandlers;
 
   constructor() {
     this.server = new Server(
       {
         name: 'bitbucket-mcp-server',
-        version: '0.4.0',
+        version: '0.5.0',
       },
       {
         capabilities: {
@@ -63,6 +65,7 @@ class BitbucketMCPServer {
     );
     this.branchHandlers = new BranchHandlers(this.apiClient, BITBUCKET_BASE_URL);
     this.reviewHandlers = new ReviewHandlers(this.apiClient, BITBUCKET_USERNAME!);
+    this.fileHandlers = new FileHandlers(this.apiClient, BITBUCKET_BASE_URL);
 
     this.setupToolHandlers();
 
@@ -116,6 +119,12 @@ class BitbucketMCPServer {
           return this.reviewHandlers.handleRequestChanges(request.params.arguments);
         case 'remove_requested_changes':
           return this.reviewHandlers.handleRemoveRequestedChanges(request.params.arguments);
+        
+        // File tools
+        case 'list_directory_content':
+          return this.fileHandlers.handleListDirectoryContent(request.params.arguments);
+        case 'get_file_content':
+          return this.fileHandlers.handleGetFileContent(request.params.arguments);
         
         default:
           throw new McpError(

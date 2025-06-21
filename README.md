@@ -23,6 +23,10 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 - `delete_branch` - Delete branches (with protection checks)
 - `get_branch` - Get detailed branch information including associated PRs
 
+#### File and Directory Tools
+- `list_directory_content` - List files and directories in a repository path
+- `get_file_content` - Get file content with smart truncation for large files
+
 #### Code Review Tools
 - `get_pull_request_diff` - Get the diff/changes for a pull request
 - `approve_pull_request` - Approve a pull request
@@ -415,6 +419,102 @@ This tool is particularly useful for:
     "repository": "my-repo",
     "pull_request_id": 123,
     "comment": "Please address the following issues..."  // Optional
+  }
+}
+```
+
+### List Directory Content
+
+```typescript
+{
+  "tool": "list_directory_content",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "path": "src/components",  // Optional (defaults to root)
+    "branch": "main"  // Optional (defaults to default branch)
+  }
+}
+```
+
+Returns directory listing with:
+- Path and branch information
+- Array of contents with:
+  - Name
+  - Type (file or directory)
+  - Size (for files)
+  - Full path
+- Total items count
+
+### Get File Content
+
+```typescript
+{
+  "tool": "get_file_content",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "file_path": "src/index.ts",
+    "branch": "main",  // Optional (defaults to default branch)
+    "start_line": 1,  // Optional: starting line (1-based, use negative for from end)
+    "line_count": 100,  // Optional: number of lines to return
+    "full_content": false  // Optional: force full content (default: false)
+  }
+}
+```
+
+**Smart Truncation Features:**
+- Automatically truncates large files (>50KB) to prevent token overload
+- Default line counts based on file type:
+  - Config files (.yml, .json): 200 lines
+  - Documentation (.md, .txt): 300 lines
+  - Code files (.ts, .js, .py): 500 lines
+  - Log files: Last 100 lines
+- Use `start_line: -50` to get last 50 lines (tail functionality)
+- Files larger than 1MB require explicit `full_content: true` or line parameters
+
+Returns file content with:
+- File path and branch
+- File size and encoding
+- Content (full or truncated based on parameters)
+- Line information (if truncated):
+  - Total lines in file
+  - Range of returned lines
+  - Truncation indicator
+- Last modified information (commit, author, date)
+
+Example responses:
+
+```json
+// Small file - returns full content
+{
+  "file_path": "package.json",
+  "branch": "main",
+  "size": 1234,
+  "encoding": "utf-8",
+  "content": "{\n  \"name\": \"my-project\",\n  ...",
+  "last_modified": {
+    "commit_id": "abc123",
+    "author": "John Doe",
+    "date": "2025-01-21T10:00:00Z"
+  }
+}
+
+// Large file - automatically truncated
+{
+  "file_path": "src/components/LargeComponent.tsx",
+  "branch": "main",
+  "size": 125000,
+  "encoding": "utf-8",
+  "content": "... first 500 lines ...",
+  "line_info": {
+    "total_lines": 3500,
+    "returned_lines": {
+      "start": 1,
+      "end": 500
+    },
+    "truncated": true,
+    "message": "Showing lines 1-500 of 3500. File size: 122.1KB"
   }
 }
 ```

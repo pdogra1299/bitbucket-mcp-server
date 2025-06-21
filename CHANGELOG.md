@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2025-01-21
+
+### Added
+- **New file and directory handling tools**:
+  - `list_directory_content` - List files and directories in any repository path
+    - Shows file/directory type, size, and full paths
+    - Supports browsing specific branches
+    - Works with both Bitbucket Server and Cloud APIs
+  - `get_file_content` - Retrieve file content with smart truncation for large files
+    - Automatic smart defaults by file type (config: 200 lines, docs: 300 lines, code: 500 lines)
+    - Pagination support with `start_line` and `line_count` parameters
+    - Tail functionality using negative `start_line` values (e.g., -50 for last 50 lines)
+    - Automatic truncation for files >50KB to prevent token overload
+    - Files >1MB require explicit `full_content: true` parameter
+    - Returns metadata including file size, encoding, and last modified info
+- Added `FileHandlers` class following existing modular architecture patterns
+- Added TypeScript interfaces for file/directory entries and metadata
+- Added type guards `isListDirectoryContentArgs` and `isGetFileContentArgs`
+
+### Changed
+- Enhanced documentation with comprehensive examples for file handling tools
+
 ## [0.4.0] - 2025-01-21
 
 ### Added

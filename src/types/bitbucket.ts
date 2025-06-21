@@ -115,6 +115,17 @@ export interface BitbucketServerBranch {
   };
 }
 
+// Bitbucket Server Directory Entry
+export interface BitbucketServerDirectoryEntry {
+  path: {
+    name: string;
+    toString: string;
+  };
+  type: 'FILE' | 'DIRECTORY';
+  size?: number;
+  contentId?: string;
+}
+
 // Bitbucket Cloud API response types
 export interface BitbucketCloudPullRequest {
   id: number;
@@ -193,6 +204,55 @@ export interface BitbucketCloudBranch {
     date: string;
   };
   type: string;
+}
+
+// Bitbucket Cloud Directory Entry
+export interface BitbucketCloudDirectoryEntry {
+  path: string;
+  type: 'commit_file' | 'commit_directory';
+  size?: number;
+  commit?: {
+    hash: string;
+  };
+  links?: {
+    self: {
+      href: string;
+    };
+    html: {
+      href: string;
+    };
+  };
+}
+
+// Bitbucket Cloud File Metadata
+export interface BitbucketCloudFileMetadata {
+  path: string;
+  size: number;
+  encoding?: string;
+  mimetype?: string;
+  links: {
+    self: {
+      href: string;
+    };
+    html: {
+      href: string;
+    };
+    download: {
+      href: string;
+    };
+  };
+  commit?: {
+    hash: string;
+    author?: {
+      raw: string;
+      user?: {
+        display_name: string;
+        account_id: string;
+      };
+    };
+    date?: string;
+    message?: string;
+  };
 }
 
 // Merge info type for enhanced PR details
