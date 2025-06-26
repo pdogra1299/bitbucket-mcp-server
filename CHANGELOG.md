@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2025-01-26
+
+### Added
+- **Enhanced `get_pull_request_diff` with filtering capabilities**:
+  - Added `include_patterns` parameter to filter diff by file patterns (whitelist)
+  - Added `exclude_patterns` parameter to exclude files from diff (blacklist)
+  - Added `file_path` parameter to get diff for a specific file only
+  - Patterns support standard glob syntax (e.g., `*.js`, `src/**/*.res`, `node_modules/**`)
+  - Response includes filtering metadata showing total files, included/excluded counts, and excluded file list
+- Added `minimatch` dependency for glob pattern matching
+- Created `DiffParser` utility class for parsing and filtering unified diff format
+
+### Changed
+- Modified `get_pull_request_diff` tool to support optional filtering without breaking existing usage
+- Updated tool definition and type guards to include new optional parameters
+- Enhanced documentation with comprehensive examples of filtering usage
+
 ## [0.6.1] - 2025-01-26
 
 ### Added

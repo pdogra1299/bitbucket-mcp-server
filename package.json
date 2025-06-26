@@ -1,6 +1,6 @@
 {
   "name": "@nexus2520/bitbucket-mcp-server",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "MCP server for Bitbucket API integration - supports both Cloud and Server",
   "type": "module",
   "main": "./build/index.js",
@@ -44,9 +44,11 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "axios": "^1.9.0"
+    "axios": "^1.9.0",
+    "minimatch": "^9.0.3"
   },
   "devDependencies": {
+    "@types/minimatch": "^5.1.2",
     "@types/node": "^22.15.29",
     "typescript": "^5.8.3"
   }

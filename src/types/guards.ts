@@ -152,13 +152,19 @@ export const isGetPullRequestDiffArgs = (
   repository: string;
   pull_request_id: number;
   context_lines?: number;
+  include_patterns?: string[];
+  exclude_patterns?: string[];
+  file_path?: string;
 } =>
   typeof args === 'object' &&
   args !== null &&
   typeof args.workspace === 'string' &&
   typeof args.repository === 'string' &&
   typeof args.pull_request_id === 'number' &&
-  (args.context_lines === undefined || typeof args.context_lines === 'number');
+  (args.context_lines === undefined || typeof args.context_lines === 'number') &&
+  (args.include_patterns === undefined || (Array.isArray(args.include_patterns) && args.include_patterns.every((p: any) => typeof p === 'string'))) &&
+  (args.exclude_patterns === undefined || (Array.isArray(args.exclude_patterns) && args.exclude_patterns.every((p: any) => typeof p === 'string'))) &&
+  (args.file_path === undefined || typeof args.file_path === 'string');
 
 export const isApprovePullRequestArgs = (
   args: any

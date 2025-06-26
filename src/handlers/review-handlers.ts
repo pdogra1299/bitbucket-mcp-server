@@ -5,6 +5,7 @@ import {
   isApprovePullRequestArgs,
   isRequestChangesArgs
 } from '../types/guards.js';
+import { DiffParser } from '../utils/diff-parser.js';
 
 export class ReviewHandlers {
   constructor(
@@ -20,7 +21,15 @@ export class ReviewHandlers {
       );
     }
 
-    const { workspace, repository, pull_request_id, context_lines = 3 } = args;
+    const { 
+      workspace, 
+      repository, 
+      pull_request_id, 
+      context_lines = 3,
+      include_patterns,
+      exclude_patterns,
+      file_path
+    } = args;
 
     try {
       let apiPath: string;
@@ -39,17 +48,76 @@ export class ReviewHandlers {
       // For diff, we want the raw text response
       config.headers = { 'Accept': 'text/plain' };
       
-      const diff = await this.apiClient.makeRequest<string>('get', apiPath, undefined, config);
+      const rawDiff = await this.apiClient.makeRequest<string>('get', apiPath, undefined, config);
+
+      // Check if filtering is needed
+      const needsFiltering = file_path || include_patterns || exclude_patterns;
+      
+      if (!needsFiltering) {
+        // Return raw diff without filtering
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                message: 'Pull request diff retrieved successfully',
+                pull_request_id,
+                diff: rawDiff
+              }, null, 2),
+            },
+          ],
+        };
+      }
+
+      // Apply filtering
+      const diffParser = new DiffParser();
+      const sections = diffParser.parseDiffIntoSections(rawDiff);
+      
+      const filterOptions = {
+        includePatterns: include_patterns,
+        excludePatterns: exclude_patterns,
+        filePath: file_path
+      };
+      
+      const filteredResult = diffParser.filterSections(sections, filterOptions);
+      const filteredDiff = diffParser.reconstructDiff(filteredResult.sections);
+
+      // Build response with filtering metadata
+      const response: any = {
+        message: 'Pull request diff retrieved successfully',
+        pull_request_id,
+        diff: filteredDiff
+      };
+
+      // Add filter metadata
+      if (filteredResult.metadata.excludedFiles > 0 || file_path || include_patterns || exclude_patterns) {
+        response.filter_metadata = {
+          total_files: filteredResult.metadata.totalFiles,
+          included_files: filteredResult.metadata.includedFiles,
+          excluded_files: filteredResult.metadata.excludedFiles
+        };
+
+        if (filteredResult.metadata.excludedFileList.length > 0) {
+          response.filter_metadata.excluded_file_list = filteredResult.metadata.excludedFileList;
+        }
+
+        response.filter_metadata.filters_applied = {};
+        if (file_path) {
+          response.filter_metadata.filters_applied.file_path = file_path;
+        }
+        if (include_patterns) {
+          response.filter_metadata.filters_applied.include_patterns = include_patterns;
+        }
+        if (exclude_patterns) {
+          response.filter_metadata.filters_applied.exclude_patterns = exclude_patterns;
+        }
+      }
 
       return {
         content: [
           {
             type: 'text',
-            text: JSON.stringify({
-              message: 'Pull request diff retrieved successfully',
-              pull_request_id,
-              diff: diff
-            }, null, 2),
+            text: JSON.stringify(response, null, 2),
           },
         ],
       };

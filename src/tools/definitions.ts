@@ -274,7 +274,7 @@ export const toolDefinitions = [
   },
   {
     name: 'get_pull_request_diff',
-    description: 'Get the diff/changes for a pull request',
+    description: 'Get the diff/changes for a pull request with optional filtering',
     inputSchema: {
       type: 'object',
       properties: {
@@ -293,6 +293,20 @@ export const toolDefinitions = [
         context_lines: {
           type: 'number',
           description: 'Number of context lines around changes (optional, default: 3)',
+        },
+        include_patterns: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of glob patterns to include (e.g., ["*.res", "src/**/*.js"]) (optional)',
+        },
+        exclude_patterns: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Array of glob patterns to exclude (e.g., ["*.lock", "*.svg"]) (optional)',
+        },
+        file_path: {
+          type: 'string',
+          description: 'Specific file path to get diff for (e.g., "src/index.ts") (optional)',
         },
       },
       required: ['workspace', 'repository', 'pull_request_id'],

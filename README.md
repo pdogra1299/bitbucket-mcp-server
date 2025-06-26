@@ -421,7 +421,10 @@ This tool is particularly useful for:
 
 ### Get Pull Request Diff
 
+Get the diff/changes for a pull request with optional filtering capabilities:
+
 ```typescript
+// Get full diff (default behavior)
 {
   "tool": "get_pull_request_diff",
   "arguments": {
@@ -429,6 +432,75 @@ This tool is particularly useful for:
     "repository": "my-repo",
     "pull_request_id": 123,
     "context_lines": 5  // Optional (default: 3)
+  }
+}
+
+// Exclude specific file types
+{
+  "tool": "get_pull_request_diff",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "exclude_patterns": ["*.lock", "*.svg", "node_modules/**", "*.min.js"]
+  }
+}
+
+// Include only specific file types
+{
+  "tool": "get_pull_request_diff",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "include_patterns": ["*.res", "*.resi", "src/**/*.js"]
+  }
+}
+
+// Get diff for a specific file only
+{
+  "tool": "get_pull_request_diff",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "file_path": "src/components/Button.res"
+  }
+}
+
+// Combine filters
+{
+  "tool": "get_pull_request_diff",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "include_patterns": ["src/**/*"],
+    "exclude_patterns": ["*.test.js", "*.spec.js"]
+  }
+}
+```
+
+**Filtering Options:**
+- `include_patterns`: Array of glob patterns to include (whitelist)
+- `exclude_patterns`: Array of glob patterns to exclude (blacklist)
+- `file_path`: Get diff for a specific file only
+- Patterns support standard glob syntax (e.g., `*.js`, `src/**/*.res`, `!test/**`)
+
+**Response includes filtering metadata:**
+```json
+{
+  "message": "Pull request diff retrieved successfully",
+  "pull_request_id": 123,
+  "diff": "..filtered diff content..",
+  "filter_metadata": {
+    "total_files": 15,
+    "included_files": 12,
+    "excluded_files": 3,
+    "excluded_file_list": ["package-lock.json", "logo.svg", "yarn.lock"],
+    "filters_applied": {
+      "exclude_patterns": ["*.lock", "*.svg"]
+    }
   }
 }
 ```
