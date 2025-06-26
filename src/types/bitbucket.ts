@@ -352,3 +352,35 @@ export interface FormattedFileChange {
   status: 'added' | 'modified' | 'removed' | 'renamed';
   old_path?: string;
 }
+
+// Types for code snippet matching
+export interface CodeMatch {
+  line_number: number;
+  line_type: 'ADDED' | 'REMOVED' | 'CONTEXT';
+  exact_content: string;
+  preview: string;
+  confidence: number;
+  context: {
+    lines_before: string[];
+    lines_after: string[];
+  };
+  sequential_position?: number; // Position within diff (for ADDED lines)
+  hunk_info?: {
+    hunk_index: number;
+    destination_start: number;
+    line_in_hunk: number;
+  };
+}
+
+export interface MultipleMatchesError {
+  code: 'MULTIPLE_MATCHES_FOUND';
+  message: string;
+  occurrences: Array<{
+    line_number: number;
+    file_path: string;
+    preview: string;
+    confidence: number;
+    line_type: 'ADDED' | 'REMOVED' | 'CONTEXT';
+  }>;
+  suggestion: string;
+}

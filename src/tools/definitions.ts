@@ -140,7 +140,7 @@ export const toolDefinitions = [
   },
   {
     name: 'add_comment',
-    description: 'Add a comment to a pull request (general or inline on specific code)',
+    description: 'Add a comment to a pull request. Supports: 1) General PR comments, 2) Replies to existing comments, 3) Inline comments on specific code lines (using line_number OR code_snippet), 4) Code suggestions for single or multi-line replacements. For inline comments, you can either provide exact line_number or use code_snippet to auto-detect the line.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -158,24 +158,57 @@ export const toolDefinitions = [
         },
         comment_text: {
           type: 'string',
-          description: 'Comment text',
+          description: 'The main comment text. For suggestions, this is the explanation before the code suggestion.',
         },
         parent_comment_id: {
           type: 'number',
-          description: 'Parent comment ID for replies (optional)',
+          description: 'ID of comment to reply to. Use this to create threaded conversations (optional)',
         },
         file_path: {
           type: 'string',
-          description: 'File path for inline comment (optional, e.g., "src/main.js")',
+          description: 'File path for inline comment. Required for inline comments. Example: "src/components/Button.js" (optional)',
         },
         line_number: {
           type: 'number',
-          description: 'Line number for inline comment (optional, required with file_path)',
+          description: 'Exact line number in the file. Use this OR code_snippet, not both. Required with file_path unless using code_snippet (optional)',
         },
         line_type: {
           type: 'string',
-          description: 'Type of line for inline comment: ADDED, REMOVED, or CONTEXT (optional, default: CONTEXT)',
+          description: 'Type of line: ADDED (green/new lines), REMOVED (red/deleted lines), or CONTEXT (unchanged lines). Default: CONTEXT',
           enum: ['ADDED', 'REMOVED', 'CONTEXT'],
+        },
+        suggestion: {
+          type: 'string',
+          description: 'Replacement code for a suggestion. Creates a suggestion block that can be applied in Bitbucket UI. Requires file_path and line_number. For multi-line, include newlines in the string (optional)',
+        },
+        suggestion_end_line: {
+          type: 'number',
+          description: 'For multi-line suggestions: the last line number to replace. If not provided, only replaces the single line at line_number (optional)',
+        },
+        code_snippet: {
+          type: 'string',
+          description: 'Exact code text from the diff to find and comment on. Use this instead of line_number for auto-detection. Must match exactly including whitespace (optional)',
+        },
+        search_context: {
+          type: 'object',
+          properties: {
+            before: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Array of code lines that appear BEFORE the target line. Helps disambiguate when code_snippet appears multiple times',
+            },
+            after: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Array of code lines that appear AFTER the target line. Helps disambiguate when code_snippet appears multiple times',
+            },
+          },
+          description: 'Additional context lines to help locate the exact position when using code_snippet. Useful when the same code appears multiple times (optional)',
+        },
+        match_strategy: {
+          type: 'string',
+          enum: ['strict', 'best'],
+          description: 'How to handle multiple matches when using code_snippet. "strict": fail with detailed error showing all matches. "best": automatically pick the highest confidence match. Default: "strict"',
         },
       },
       required: ['workspace', 'repository', 'pull_request_id', 'comment_text'],

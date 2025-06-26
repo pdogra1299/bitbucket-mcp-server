@@ -1,6 +1,8 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { BitbucketApiClient } from '../utils/api-client.js';
 import { formatServerResponse, formatCloudResponse } from '../utils/formatters.js';
+import { formatSuggestionComment } from '../utils/suggestion-formatter.js';
+import { DiffParser } from '../utils/diff-parser.js';
 import { 
   BitbucketServerPullRequest, 
   BitbucketCloudPullRequest, 
@@ -9,7 +11,9 @@ import {
   BitbucketCloudComment,
   BitbucketCloudFileChange,
   FormattedComment,
-  FormattedFileChange
+  FormattedFileChange,
+  CodeMatch,
+  MultipleMatchesError
 } from '../types/bitbucket.js';
 import {
   isGetPullRequestArgs,
@@ -27,6 +31,43 @@ export class PullRequestHandlers {
     private username: string
   ) {}
 
+  private async getFilteredPullRequestDiff(
+    workspace: string,
+    repository: string,
+    pullRequestId: number,
+    filePath: string,
+    contextLines: number = 3
+  ): Promise<string> {
+    let apiPath: string;
+    let config: any = {};
+
+    if (this.apiClient.getIsServer()) {
+      // Bitbucket Server API
+      apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pullRequestId}/diff`;
+      config.params = { contextLines };
+    } else {
+      // Bitbucket Cloud API
+      apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pullRequestId}/diff`;
+      config.params = { context: contextLines };
+    }
+
+    config.headers = { 'Accept': 'text/plain' };
+    
+    const rawDiff = await this.apiClient.makeRequest<string>('get', apiPath, undefined, config);
+
+    const diffParser = new DiffParser();
+    const sections = diffParser.parseDiffIntoSections(rawDiff);
+    
+    const filterOptions = {
+      filePath: filePath
+    };
+    
+    const filteredResult = diffParser.filterSections(sections, filterOptions);
+    const filteredDiff = diffParser.reconstructDiff(filteredResult.sections);
+
+    return filteredDiff;
+  }
+
   async handleGetPullRequest(args: any) {
     if (!isGetPullRequestArgs(args)) {
       throw new McpError(
@@ -38,7 +79,6 @@ export class PullRequestHandlers {
     const { workspace, repository, pull_request_id } = args;
 
     try {
-      // Different API paths for Server vs Cloud
       const apiPath = this.apiClient.getIsServer()
         ? `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}`
         : `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}`;
@@ -47,10 +87,8 @@ export class PullRequestHandlers {
 
       let mergeInfo: MergeInfo = {};
 
-      // For Bitbucket Server, fetch additional merge information if PR is merged
       if (this.apiClient.getIsServer() && pr.state === 'MERGED') {
         try {
-          // Try to get activities to find merge information
           const activitiesPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/activities`;
           const activitiesResponse = await this.apiClient.makeRequest<any>('get', activitiesPath, undefined, {
             params: { limit: 100 }
@@ -64,25 +102,21 @@ export class PullRequestHandlers {
             mergeInfo.mergedBy = mergeActivity.user?.displayName || null;
             mergeInfo.mergedAt = new Date(mergeActivity.createdDate).toISOString();
             
-            // Try to get commit message if we have the hash
             if (mergeActivity.commit?.id) {
               try {
                 const commitPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/commits/${mergeActivity.commit.id}`;
                 const commitResponse = await this.apiClient.makeRequest<any>('get', commitPath);
                 mergeInfo.mergeCommitMessage = commitResponse.message || null;
               } catch (commitError) {
-                // If we can't get the commit message, continue without it
                 console.error('Failed to fetch merge commit message:', commitError);
               }
             }
           }
         } catch (activitiesError) {
-          // If we can't get activities, continue without merge info
           console.error('Failed to fetch PR activities:', activitiesError);
         }
       }
 
-      // Fetch comments and file changes in parallel
       let comments: FormattedComment[] = [];
       let activeCommentCount = 0;
       let totalCommentCount = 0;
@@ -101,16 +135,13 @@ export class PullRequestHandlers {
         fileChanges = fileChangesResult.fileChanges;
         fileChangesSummary = fileChangesResult.summary;
       } catch (error) {
-        // Log error but continue with PR data
         console.error('Failed to fetch additional PR data:', error);
       }
 
-      // Format the response based on server type
       const formattedResponse = this.apiClient.getIsServer() 
         ? formatServerResponse(pr as BitbucketServerPullRequest, mergeInfo, this.baseUrl)
         : formatCloudResponse(pr as BitbucketCloudPullRequest);
 
-      // Add comments and file changes to the response
       const enhancedResponse = {
         ...formattedResponse,
         active_comments: comments,
@@ -174,7 +205,6 @@ export class PullRequestHandlers {
 
       const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
 
-      // Format the response
       let pullRequests: any[] = [];
       let totalCount = 0;
       let nextPageStart = null;
@@ -386,9 +416,61 @@ export class PullRequestHandlers {
       );
     }
 
-    const { workspace, repository, pull_request_id, comment_text, parent_comment_id, file_path, line_number, line_type } = args;
+    let { 
+      workspace, 
+      repository, 
+      pull_request_id, 
+      comment_text, 
+      parent_comment_id, 
+      file_path, 
+      line_number, 
+      line_type,
+      suggestion,
+      suggestion_end_line,
+      code_snippet,
+      search_context,
+      match_strategy = 'strict'
+    } = args;
+
+    let sequentialPosition: number | undefined;
+    if (code_snippet && !line_number && file_path) {
+      try {
+        const resolved = await this.resolveLineFromCode(
+          workspace,
+          repository,
+          pull_request_id,
+          file_path,
+          code_snippet,
+          search_context,
+          match_strategy
+        );
+        
+        line_number = resolved.line_number;
+        line_type = resolved.line_type;
+        sequentialPosition = resolved.sequential_position;
+      } catch (error) {
+        throw error;
+      }
+    }
+
+    if (suggestion && (!file_path || !line_number)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Suggestions require file_path and line_number to be specified'
+      );
+    }
 
     const isInlineComment = file_path !== undefined && line_number !== undefined;
+
+    let finalCommentText = comment_text;
+    if (suggestion) {
+      finalCommentText = formatSuggestionComment(
+        comment_text,
+        suggestion,
+        line_number,
+        suggestion_end_line || line_number
+      );
+    }
 
     try {
       let apiPath: string;
@@ -398,7 +480,7 @@ export class PullRequestHandlers {
         // Bitbucket Server API
         apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments`;
         requestBody = {
-          text: comment_text
+          text: finalCommentText
         };
         
         if (parent_comment_id !== undefined) {
@@ -408,18 +490,19 @@ export class PullRequestHandlers {
         if (isInlineComment) {
           requestBody.anchor = {
             line: line_number,
-            lineType: line_type || 'CONTEXT',
+            lineType: line_type || 'CONTEXT', 
             fileType: line_type === 'REMOVED' ? 'FROM' : 'TO',
             path: file_path,
             diffType: 'EFFECTIVE'
           };
+          
         }
       } else {
         // Bitbucket Cloud API
         apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/comments`;
         requestBody = {
           content: {
-            raw: comment_text
+            raw: finalCommentText
           }
         };
         
@@ -437,12 +520,16 @@ export class PullRequestHandlers {
 
       const comment = await this.apiClient.makeRequest<any>('post', apiPath, requestBody);
 
+      const responseMessage = suggestion 
+        ? 'Comment with code suggestion added successfully'
+        : (isInlineComment ? 'Inline comment added successfully' : 'Comment added successfully');
+
       return {
         content: [
           {
             type: 'text',
             text: JSON.stringify({
-              message: isInlineComment ? 'Inline comment added successfully' : 'Comment added successfully',
+              message: responseMessage,
               comment: {
                 id: comment.id,
                 text: this.apiClient.getIsServer() ? comment.text : comment.content.raw,
@@ -450,7 +537,9 @@ export class PullRequestHandlers {
                 created_on: this.apiClient.getIsServer() ? new Date(comment.createdDate).toLocaleString() : comment.created_on,
                 file_path: isInlineComment ? file_path : undefined,
                 line_number: isInlineComment ? line_number : undefined,
-                line_type: isInlineComment ? (line_type || 'CONTEXT') : undefined
+                line_type: isInlineComment ? (line_type || 'CONTEXT') : undefined,
+                has_suggestion: !!suggestion,
+                suggestion_lines: suggestion ? (suggestion_end_line ? `${line_number}-${suggestion_end_line}` : `${line_number}`) : undefined
               }
             }, null, 2),
           },
@@ -532,7 +621,6 @@ export class PullRequestHandlers {
       let totalCount = 0;
 
       if (this.apiClient.getIsServer()) {
-        // Helper function to process nested comments recursively
         const processNestedComments = (comment: any, anchor: any): FormattedComment => {
           const formattedComment: FormattedComment = {
             id: comment.id,
@@ -545,11 +633,9 @@ export class PullRequestHandlers {
             state: comment.state
           };
 
-          // Process nested replies
           if (comment.comments && comment.comments.length > 0) {
             formattedComment.replies = comment.comments
               .filter((reply: any) => {
-                // Apply same filters to replies
                 if (reply.state === 'RESOLVED') return false;
                 if (anchor && anchor.orphaned === true) return false;
                 return true;
@@ -560,7 +646,6 @@ export class PullRequestHandlers {
           return formattedComment;
         };
 
-        // Helper to count all comments including nested ones
         const countAllComments = (comment: any): number => {
           let count = 1;
           if (comment.comments && comment.comments.length > 0) {
@@ -569,16 +654,13 @@ export class PullRequestHandlers {
           return count;
         };
 
-        // Helper to count active comments including nested ones
         const countActiveComments = (comment: any, anchor: any): number => {
           let count = 0;
           
-          // Check if this comment is active
           if (comment.state !== 'RESOLVED' && (!anchor || anchor.orphaned !== true)) {
             count = 1;
           }
           
-          // Count active nested comments
           if (comment.comments && comment.comments.length > 0) {
             count += comment.comments.reduce((sum: number, reply: any) => sum + countActiveComments(reply, anchor), 0);
           }
@@ -586,7 +668,6 @@ export class PullRequestHandlers {
           return count;
         };
 
-        // Bitbucket Server API - fetch from activities
         const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pullRequestId}/activities`;
         const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
           params: { limit: 1000 }
@@ -594,41 +675,32 @@ export class PullRequestHandlers {
 
         const activities = response.values || [];
         
-        // Filter for comment activities
         const commentActivities = activities.filter((a: any) => 
           a.action === 'COMMENTED' && a.comment
         );
 
-        // Count all comments including nested ones
         totalCount = commentActivities.reduce((sum: number, activity: any) => {
           return sum + countAllComments(activity.comment);
         }, 0);
 
-        // Count active comments including nested ones
         activeCount = commentActivities.reduce((sum: number, activity: any) => {
           return sum + countActiveComments(activity.comment, activity.commentAnchor);
         }, 0);
 
-        // Process top-level comments and their nested replies
         const processedComments = commentActivities
           .filter((a: any) => {
             const c = a.comment;
             const anchor = a.commentAnchor;
             
-            // Skip resolved comments
             if (c.state === 'RESOLVED') return false;
-            
-            // Skip orphaned inline comments
             if (anchor && anchor.orphaned === true) return false;
             
             return true;
           })
           .map((a: any) => processNestedComments(a.comment, a.commentAnchor));
 
-        // Limit to 20 top-level comments
         comments = processedComments.slice(0, 20);
       } else {
-        // Bitbucket Cloud API
         const apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pullRequestId}/comments`;
         const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
           params: { pagelen: 100 }
@@ -637,7 +709,6 @@ export class PullRequestHandlers {
         const allComments = response.values || [];
         totalCount = allComments.length;
 
-        // Filter for active comments (not deleted or resolved) and limit to 20
         const activeComments = allComments
           .filter((c: BitbucketCloudComment) => !c.deleted && !c.resolved)
           .slice(0, 20);
@@ -673,7 +744,6 @@ export class PullRequestHandlers {
       let totalLinesRemoved = 0;
 
       if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API - use changes endpoint
         const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pullRequestId}/changes`;
         const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
           params: { limit: 1000 }
@@ -694,7 +764,6 @@ export class PullRequestHandlers {
           };
         });
       } else {
-        // Bitbucket Cloud API - use diffstat endpoint (has line statistics)
         const apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pullRequestId}/diffstat`;
         const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
           params: { pagelen: 100 }
@@ -728,5 +797,300 @@ export class PullRequestHandlers {
         }
       };
     }
+  }
+
+  private async resolveLineFromCode(
+    workspace: string,
+    repository: string,
+    pullRequestId: number,
+    filePath: string,
+    codeSnippet: string,
+    searchContext?: { before?: string[]; after?: string[] },
+    matchStrategy: 'strict' | 'best' = 'strict'
+  ): Promise<{ 
+    line_number: number; 
+    line_type: 'ADDED' | 'REMOVED' | 'CONTEXT'; 
+    sequential_position?: number;
+    hunk_info?: any;
+    diff_context?: string;
+    diff_content_preview?: string;
+    calculation_details?: string;
+  }> {
+    try {
+      const diffContent = await this.getFilteredPullRequestDiff(workspace, repository, pullRequestId, filePath);
+      
+      const parser = new DiffParser();
+      const sections = parser.parseDiffIntoSections(diffContent);
+      
+      let fileSection = sections[0];
+      if (!this.apiClient.getIsServer()) {
+        fileSection = sections.find(s => s.filePath === filePath) || sections[0];
+      }
+
+      if (!fileSection) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `File ${filePath} not found in pull request diff`
+        );
+      }
+
+      const matches = this.findCodeMatches(
+        fileSection.content,
+        codeSnippet,
+        searchContext
+      );
+      
+      if (matches.length === 0) {
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Code snippet not found in ${filePath}`
+        );
+      }
+
+      if (matches.length === 1) {
+        return {
+          line_number: matches[0].line_number,
+          line_type: matches[0].line_type,
+          sequential_position: matches[0].sequential_position,
+          hunk_info: matches[0].hunk_info,
+          diff_context: matches[0].preview,
+          diff_content_preview: diffContent.split('\n').slice(0, 50).join('\n'),
+          calculation_details: `Direct line number from diff: ${matches[0].line_number}`
+        };
+      }
+
+      if (matchStrategy === 'best') {
+        const best = this.selectBestMatch(matches);
+        
+        return {
+          line_number: best.line_number,
+          line_type: best.line_type,
+          sequential_position: best.sequential_position,
+          hunk_info: best.hunk_info,
+          diff_context: best.preview,
+          diff_content_preview: diffContent.split('\n').slice(0, 50).join('\n'),
+          calculation_details: `Best match selected from ${matches.length} matches, line: ${best.line_number}`
+        };
+      }
+
+      const error: MultipleMatchesError = {
+        code: 'MULTIPLE_MATCHES_FOUND',
+        message: `Code snippet '${codeSnippet.substring(0, 50)}...' found in ${matches.length} locations`,
+        occurrences: matches.map(m => ({
+          line_number: m.line_number,
+          file_path: filePath,
+          preview: m.preview,
+          confidence: m.confidence,
+          line_type: m.line_type
+        })),
+        suggestion: 'To resolve, either:\n1. Add more context to uniquely identify the location\n2. Use match_strategy: \'best\' to auto-select highest confidence match\n3. Use line_number directly'
+      };
+
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        JSON.stringify({ error })
+      );
+    } catch (error) {
+      if (error instanceof McpError) {
+        throw error;
+      }
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Failed to resolve line from code: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  private findCodeMatches(
+    diffContent: string,
+    codeSnippet: string,
+    searchContext?: { before?: string[]; after?: string[] }
+  ): CodeMatch[] {
+    const lines = diffContent.split('\n');
+    const matches: CodeMatch[] = [];
+    let currentDestLine = 0; // Destination file line number
+    let currentSrcLine = 0;  // Source file line number
+    let inHunk = false;
+    let sequentialAddedCount = 0; // Track sequential ADDED lines
+    let currentHunkIndex = -1;
+    let currentHunkDestStart = 0;
+    let currentHunkSrcStart = 0;
+    let destPositionInHunk = 0; // Track position in destination file relative to hunk start
+    let srcPositionInHunk = 0;  // Track position in source file relative to hunk start
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      if (line.startsWith('@@')) {
+        const match = line.match(/@@ -(\d+),\d+ \+(\d+),\d+ @@/);
+        if (match) {
+          currentHunkSrcStart = parseInt(match[1]);
+          currentHunkDestStart = parseInt(match[2]);
+          currentSrcLine = currentHunkSrcStart;
+          currentDestLine = currentHunkDestStart;
+          inHunk = true;
+          currentHunkIndex++;
+          destPositionInHunk = 0;
+          srcPositionInHunk = 0;
+          continue;
+        }
+      }
+
+      if (!inHunk) continue;
+
+      if (line === '') {
+        inHunk = false;
+        continue;
+      }
+
+      let lineType: 'ADDED' | 'REMOVED' | 'CONTEXT';
+      let lineContent = '';
+      let lineNumber = 0;
+
+      if (line.startsWith('+')) {
+        lineType = 'ADDED';
+        lineContent = line.substring(1);
+        lineNumber = currentHunkDestStart + destPositionInHunk;
+        destPositionInHunk++;
+        sequentialAddedCount++;
+      } else if (line.startsWith('-')) {
+        lineType = 'REMOVED';
+        lineContent = line.substring(1);
+        lineNumber = currentHunkSrcStart + srcPositionInHunk;
+        srcPositionInHunk++;
+      } else if (line.startsWith(' ')) {
+        lineType = 'CONTEXT';
+        lineContent = line.substring(1);
+        lineNumber = currentHunkDestStart + destPositionInHunk;
+        destPositionInHunk++;
+        srcPositionInHunk++;
+      } else {
+        inHunk = false;
+        continue;
+      }
+
+      if (lineContent.trim() === codeSnippet.trim()) {
+        const confidence = this.calculateConfidence(
+          lines,
+          i,
+          searchContext,
+          lineType
+        );
+
+        matches.push({
+          line_number: lineNumber,
+          line_type: lineType,
+          exact_content: codeSnippet,
+          preview: this.getPreview(lines, i),
+          confidence,
+          context: this.extractContext(lines, i),
+          sequential_position: lineType === 'ADDED' ? sequentialAddedCount : undefined,
+          hunk_info: {
+            hunk_index: currentHunkIndex,
+            destination_start: currentHunkDestStart,
+            line_in_hunk: destPositionInHunk
+          }
+        });
+      }
+
+      if (lineType === 'ADDED') {
+        currentDestLine++;
+      } else if (lineType === 'REMOVED') {
+        currentSrcLine++;
+      } else if (lineType === 'CONTEXT') {
+        currentSrcLine++;
+        currentDestLine++;
+      }
+    }
+
+    return matches;
+  }
+
+  private calculateConfidence(
+    lines: string[],
+    index: number,
+    searchContext?: { before?: string[]; after?: string[] },
+    lineType?: 'ADDED' | 'REMOVED' | 'CONTEXT'
+  ): number {
+    let confidence = 0.5; // Base confidence
+
+    if (!searchContext) {
+      return confidence;
+    }
+
+    if (searchContext.before) {
+      let matchedBefore = 0;
+      for (let j = 0; j < searchContext.before.length; j++) {
+        const contextLine = searchContext.before[searchContext.before.length - 1 - j];
+        const checkIndex = index - j - 1;
+        if (checkIndex >= 0) {
+          const checkLine = lines[checkIndex].substring(1);
+          if (checkLine.trim() === contextLine.trim()) {
+            matchedBefore++;
+          }
+        }
+      }
+      confidence += (matchedBefore / searchContext.before.length) * 0.3;
+    }
+
+    if (searchContext.after) {
+      let matchedAfter = 0;
+      for (let j = 0; j < searchContext.after.length; j++) {
+        const contextLine = searchContext.after[j];
+        const checkIndex = index + j + 1;
+        if (checkIndex < lines.length) {
+          const checkLine = lines[checkIndex].substring(1);
+          if (checkLine.trim() === contextLine.trim()) {
+            matchedAfter++;
+          }
+        }
+      }
+      confidence += (matchedAfter / searchContext.after.length) * 0.3;
+    }
+
+    if (lineType === 'ADDED') {
+      confidence += 0.1;
+    }
+
+    return Math.min(confidence, 1.0);
+  }
+
+  private getPreview(lines: string[], index: number): string {
+    const start = Math.max(0, index - 1);
+    const end = Math.min(lines.length, index + 2);
+    const previewLines = [];
+
+    for (let i = start; i < end; i++) {
+      const prefix = i === index ? '> ' : '  ';
+      previewLines.push(prefix + lines[i]);
+    }
+
+    return previewLines.join('\n');
+  }
+
+  private extractContext(lines: string[], index: number): { lines_before: string[]; lines_after: string[] } {
+    const linesBefore: string[] = [];
+    const linesAfter: string[] = [];
+
+    for (let i = Math.max(0, index - 2); i < index; i++) {
+      if (lines[i].match(/^[+\- ]/)) {
+        linesBefore.push(lines[i].substring(1));
+      }
+    }
+
+    for (let i = index + 1; i < Math.min(lines.length, index + 3); i++) {
+      if (lines[i].match(/^[+\- ]/)) {
+        linesAfter.push(lines[i].substring(1));
+      }
+    }
+
+    return {
+      lines_before: linesBefore,
+      lines_after: linesAfter
+    };
+  }
+
+  private selectBestMatch(matches: CodeMatch[]): CodeMatch {
+    return matches.sort((a, b) => b.confidence - a.confidence)[0];
   }
 }

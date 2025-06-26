@@ -82,6 +82,14 @@ export const isAddCommentArgs = (
   file_path?: string;
   line_number?: number;
   line_type?: 'ADDED' | 'REMOVED' | 'CONTEXT';
+  suggestion?: string;
+  suggestion_end_line?: number;
+  code_snippet?: string;
+  search_context?: {
+    before?: string[];
+    after?: string[];
+  };
+  match_strategy?: 'strict' | 'best';
 } =>
   typeof args === 'object' &&
   args !== null &&
@@ -92,7 +100,16 @@ export const isAddCommentArgs = (
   (args.parent_comment_id === undefined || typeof args.parent_comment_id === 'number') &&
   (args.file_path === undefined || typeof args.file_path === 'string') &&
   (args.line_number === undefined || typeof args.line_number === 'number') &&
-  (args.line_type === undefined || ['ADDED', 'REMOVED', 'CONTEXT'].includes(args.line_type));
+  (args.line_type === undefined || ['ADDED', 'REMOVED', 'CONTEXT'].includes(args.line_type)) &&
+  (args.suggestion === undefined || typeof args.suggestion === 'string') &&
+  (args.suggestion_end_line === undefined || typeof args.suggestion_end_line === 'number') &&
+  (args.code_snippet === undefined || typeof args.code_snippet === 'string') &&
+  (args.search_context === undefined || (
+    typeof args.search_context === 'object' &&
+    (args.search_context.before === undefined || Array.isArray(args.search_context.before)) &&
+    (args.search_context.after === undefined || Array.isArray(args.search_context.after))
+  )) &&
+  (args.match_strategy === undefined || ['strict', 'best'].includes(args.match_strategy));
 
 export const isMergePullRequestArgs = (
   args: any

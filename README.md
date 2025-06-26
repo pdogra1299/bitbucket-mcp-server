@@ -271,9 +271,9 @@ Returns a paginated list of pull requests with:
 
 ### Add Comment
 
-Add general comments, reply to existing comments, or add inline comments on specific lines of code:
+Add a comment to a pull request, either as a general comment or inline on specific code:
 
-```typescript
+```javascript
 // General comment
 {
   "tool": "add_comment",
@@ -281,36 +281,149 @@ Add general comments, reply to existing comments, or add inline comments on spec
     "workspace": "PROJ",
     "repository": "my-repo",
     "pull_request_id": 123,
-    "comment_text": "Great work! Just one small suggestion..."
+    "comment_text": "Great work on this PR!"
   }
 }
 
-// Reply to an existing comment
+// Inline comment on specific line
 {
   "tool": "add_comment",
   "arguments": {
     "workspace": "PROJ",
     "repository": "my-repo",
     "pull_request_id": 123,
-    "comment_text": "Thanks for the feedback! I've updated the code.",
-    "parent_comment_id": 456  // ID of the comment you're replying to
-  }
-}
-
-// Inline comment on specific code
-{
-  "tool": "add_comment",
-  "arguments": {
-    "workspace": "PROJ",
-    "repository": "my-repo",
-    "pull_request_id": 123,
-    "comment_text": "This variable should be renamed for clarity",
-    "file_path": "src/main.js",
+    "comment_text": "Consider extracting this into a separate function",
+    "file_path": "src/utils/helpers.js",
     "line_number": 42,
-    "line_type": "ADDED"  // ADDED, REMOVED, or CONTEXT
+    "line_type": "CONTEXT"  // ADDED, REMOVED, or CONTEXT
+  }
+}
+
+// Reply to existing comment
+{
+  "tool": "add_comment",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "comment_text": "I agree with this suggestion",
+    "parent_comment_id": 456
+  }
+}
+
+// Add comment with code suggestion (single line)
+{
+  "tool": "add_comment",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "comment_text": "This variable name could be more descriptive.",
+    "file_path": "src/utils/helpers.js",
+    "line_number": 42,
+    "line_type": "CONTEXT",
+    "suggestion": "const userAuthenticationToken = token;"
+  }
+}
+
+// Add comment with multi-line code suggestion
+{
+  "tool": "add_comment",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "comment_text": "This function could be simplified using array methods.",
+    "file_path": "src/utils/calculations.js",
+    "line_number": 50,
+    "suggestion_end_line": 55,
+    "line_type": "CONTEXT",
+    "suggestion": "function calculateTotal(items) {\n  return items.reduce((sum, item) => sum + item.price, 0);\n}"
   }
 }
 ```
+
+The suggestion feature formats comments using GitHub-style markdown suggestion blocks that Bitbucket can render. When adding a suggestion:
+- `suggestion` is required and contains the replacement code
+- `file_path` and `line_number` are required when using suggestions
+- `suggestion_end_line` is optional and used for multi-line suggestions (defaults to `line_number`)
+- The comment will be formatted with a ````suggestion` markdown block that may be applicable in the Bitbucket UI
+
+### Using Code Snippets Instead of Line Numbers
+
+The `add_comment` tool now supports finding line numbers automatically using code snippets. This is especially useful when AI tools analyze diffs and may struggle with exact line numbers:
+
+```javascript
+// Add comment using code snippet
+{
+  "tool": "add_comment",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "comment_text": "This variable name could be more descriptive",
+    "file_path": "src/components/Button.res",
+    "code_snippet": "let isDisabled = false",
+    "search_context": {
+      "before": ["let onClick = () => {"],
+      "after": ["setLoading(true)"]
+    }
+  }
+}
+
+// Handle multiple matches with strategy
+{
+  "tool": "add_comment",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "comment_text": "Consider extracting this",
+    "file_path": "src/utils/helpers.js",
+    "code_snippet": "return result;",
+    "search_context": {
+      "before": ["const result = calculate();"],
+      "after": ["}"]
+    },
+    "match_strategy": "best"  // Auto-select highest confidence match
+  }
+}
+```
+
+**Code Snippet Parameters:**
+- `code_snippet`: The exact code line to find (alternative to `line_number`)
+- `search_context`: Optional context to disambiguate multiple matches
+  - `before`: Array of lines that should appear before the target
+  - `after`: Array of lines that should appear after the target
+- `match_strategy`: How to handle multiple matches
+  - `"strict"` (default): Fail with error showing all matches
+  - `"best"`: Auto-select the highest confidence match
+
+**Error Response for Multiple Matches (strict mode):**
+```json
+{
+  "error": {
+    "code": "MULTIPLE_MATCHES_FOUND",
+    "message": "Code snippet 'return result;' found in 3 locations",
+    "occurrences": [
+      {
+        "line_number": 42,
+        "file_path": "src/utils/helpers.js",
+        "preview": "  const result = calculate();\n> return result;\n}",
+        "confidence": 0.9,
+        "line_type": "ADDED"
+      },
+      // ... more matches
+    ],
+    "suggestion": "To resolve, either:\n1. Add more context...\n2. Use match_strategy: 'best'...\n3. Use line_number directly"
+  }
+}
+```
+
+This feature is particularly useful for:
+- AI-powered code review tools that analyze diffs
+- Scripts that automatically add comments based on code patterns
+- Avoiding line number confusion in large diffs
 
 **Note on comment replies:**
 - Use `parent_comment_id` to reply to any comment (general or inline)
@@ -326,6 +439,62 @@ Add general comments, reply to existing comments, or add inline comments on spec
   - `ADDED` - For newly added lines (green in diff)
   - `REMOVED` - For deleted lines (red in diff)
   - `CONTEXT` - For unchanged context lines
+
+#### Add Comment - Complete Usage Guide
+
+The `add_comment` tool supports multiple scenarios. Here's when and how to use each approach:
+
+**1. General PR Comments (No file/line)**
+- Use when: Making overall feedback about the PR
+- Required params: `comment_text` only
+- Example: "LGTM!", "Please update the documentation"
+
+**2. Reply to Existing Comments**
+- Use when: Continuing a conversation thread
+- Required params: `comment_text`, `parent_comment_id`
+- Works for both general and inline comment replies
+
+**3. Inline Comments with Line Number**
+- Use when: You know the exact line number from the diff
+- Required params: `comment_text`, `file_path`, `line_number`
+- Optional: `line_type` (defaults to CONTEXT)
+
+**4. Inline Comments with Code Snippet**
+- Use when: You have the code but not the line number (common for AI tools)
+- Required params: `comment_text`, `file_path`, `code_snippet`
+- The tool will automatically find the line number
+- Add `search_context` if the code appears multiple times
+- Use `match_strategy: "best"` to auto-select when multiple matches exist
+
+**5. Code Suggestions**
+- Use when: Proposing specific code changes
+- Required params: `comment_text`, `file_path`, `line_number`, `suggestion`
+- For multi-line: also add `suggestion_end_line`
+- Creates applicable suggestion blocks in Bitbucket UI
+
+**Decision Flow for AI/Automated Tools:**
+```
+1. Do you want to suggest code changes?
+   → Use suggestion with line_number
+   
+2. Do you have the exact line number?
+   → Use line_number directly
+   
+3. Do you have the code snippet but not line number?
+   → Use code_snippet (add search_context if needed)
+   
+4. Is it a general comment about the PR?
+   → Use comment_text only
+   
+5. Are you replying to another comment?
+   → Add parent_comment_id
+```
+
+**Common Pitfalls to Avoid:**
+- Don't use both `line_number` and `code_snippet` - pick one
+- Suggestions always need `file_path` and `line_number`
+- Code snippets must match exactly (including whitespace)
+- REMOVED lines reference the source file, ADDED/CONTEXT reference the destination
 
 ### Merge Pull Request
 

@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2025-01-26
+
+### Added
+- **Code snippet support in `add_comment` tool**:
+  - Added `code_snippet` parameter to find line numbers automatically using code text
+  - Added `search_context` parameter with `before` and `after` arrays to disambiguate multiple matches
+  - Added `match_strategy` parameter with options:
+    - `"strict"` (default): Fails with detailed error when multiple matches found
+    - `"best"`: Auto-selects the highest confidence match
+  - Returns detailed error with all occurrences when multiple matches found in strict mode
+  - Particularly useful for AI-powered code review tools that analyze diffs
+- Created comprehensive line matching algorithm that:
+  - Parses diffs to find exact code snippets
+  - Calculates confidence scores based on context matching
+  - Handles added, removed, and context lines appropriately
+
+### Changed
+- Enhanced `add_comment` tool to resolve line numbers from code snippets when `line_number` is not provided
+- Improved error messages to include preview and suggestions for resolving ambiguous matches
+
+## [0.8.0] - 2025-01-26
+
+### Added
+- **Code suggestions support in `add_comment` tool**:
+  - Added `suggestion` parameter to add code suggestions in comments
+  - Added `suggestion_end_line` parameter for multi-line suggestions
+  - Suggestions are formatted using GitHub-style markdown ````suggestion` blocks
+  - Works with both single-line and multi-line code replacements
+  - Requires `file_path` and `line_number` to be specified when using suggestions
+  - Compatible with both Bitbucket Cloud and Server
+- Created `suggestion-formatter.ts` utility for formatting suggestion comments
+
+### Changed
+- Enhanced `add_comment` tool to validate suggestion requirements
+- Updated tool response to indicate when a comment contains a suggestion
+
 ## [0.7.0] - 2025-01-26
 
 ### Added
