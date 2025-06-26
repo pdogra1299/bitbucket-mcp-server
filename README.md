@@ -188,6 +188,25 @@ Returns detailed information about the pull request including:
   - `merged_by`: Who performed the merge
   - `merged_at`: When the merge occurred
   - `merge_commit_message`: The merge commit message
+- **Active comments with nested replies** (unresolved comments that need attention):
+  - `active_comments`: Array of active comments (up to 20 most recent top-level comments)
+    - Comment text and author
+    - Creation date
+    - Whether it's an inline comment (with file path and line number)
+    - **Nested replies** (for Bitbucket Server):
+      - `replies`: Array of reply comments with same structure
+      - Replies can be nested multiple levels deep
+    - **Parent reference** (for Bitbucket Cloud):
+      - `parent_id`: ID of the parent comment for replies
+  - `active_comment_count`: Total count of unresolved comments (including nested replies)
+  - `total_comment_count`: Total count of all comments (including resolved and replies)
+- **File changes**:
+  - `file_changes`: Array of all files modified in the PR
+    - File path
+    - Status (added, modified, removed, or renamed)
+    - Old path (for renamed files)
+  - `file_changes_summary`: Summary statistics
+    - Total files changed
 - And more...
 
 ### List Pull Requests
@@ -252,7 +271,7 @@ Returns a paginated list of pull requests with:
 
 ### Add Comment
 
-Add general comments or inline comments on specific lines of code:
+Add general comments, reply to existing comments, or add inline comments on specific lines of code:
 
 ```typescript
 // General comment
@@ -262,8 +281,19 @@ Add general comments or inline comments on specific lines of code:
     "workspace": "PROJ",
     "repository": "my-repo",
     "pull_request_id": 123,
-    "comment_text": "Great work! Just one small suggestion...",
-    "parent_comment_id": 456  // Optional - for replies
+    "comment_text": "Great work! Just one small suggestion..."
+  }
+}
+
+// Reply to an existing comment
+{
+  "tool": "add_comment",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "comment_text": "Thanks for the feedback! I've updated the code.",
+    "parent_comment_id": 456  // ID of the comment you're replying to
   }
 }
 
@@ -281,6 +311,13 @@ Add general comments or inline comments on specific lines of code:
   }
 }
 ```
+
+**Note on comment replies:**
+- Use `parent_comment_id` to reply to any comment (general or inline)
+- In `get_pull_request` responses:
+  - Bitbucket Server shows replies nested in a `replies` array
+  - Bitbucket Cloud shows a `parent_id` field for reply comments
+- You can reply to replies, creating nested conversations
 
 **Note on inline comments:**
 - `file_path`: The path to the file as shown in the diff

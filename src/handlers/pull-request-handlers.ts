@@ -5,7 +5,11 @@ import {
   BitbucketServerPullRequest, 
   BitbucketCloudPullRequest, 
   BitbucketServerActivity,
-  MergeInfo 
+  MergeInfo,
+  BitbucketCloudComment,
+  BitbucketCloudFileChange,
+  FormattedComment,
+  FormattedFileChange
 } from '../types/bitbucket.js';
 import {
   isGetPullRequestArgs,
@@ -78,16 +82,49 @@ export class PullRequestHandlers {
         }
       }
 
+      // Fetch comments and file changes in parallel
+      let comments: FormattedComment[] = [];
+      let activeCommentCount = 0;
+      let totalCommentCount = 0;
+      let fileChanges: FormattedFileChange[] = [];
+      let fileChangesSummary: any = null;
+
+      try {
+        const [commentsResult, fileChangesResult] = await Promise.all([
+          this.fetchPullRequestComments(workspace, repository, pull_request_id),
+          this.fetchPullRequestFileChanges(workspace, repository, pull_request_id)
+        ]);
+
+        comments = commentsResult.comments;
+        activeCommentCount = commentsResult.activeCount;
+        totalCommentCount = commentsResult.totalCount;
+        fileChanges = fileChangesResult.fileChanges;
+        fileChangesSummary = fileChangesResult.summary;
+      } catch (error) {
+        // Log error but continue with PR data
+        console.error('Failed to fetch additional PR data:', error);
+      }
+
       // Format the response based on server type
       const formattedResponse = this.apiClient.getIsServer() 
         ? formatServerResponse(pr as BitbucketServerPullRequest, mergeInfo, this.baseUrl)
         : formatCloudResponse(pr as BitbucketCloudPullRequest);
 
+      // Add comments and file changes to the response
+      const enhancedResponse = {
+        ...formattedResponse,
+        active_comments: comments,
+        active_comment_count: activeCommentCount,
+        total_comment_count: totalCommentCount,
+        file_changes: fileChanges,
+        file_changes_summary: fileChangesSummary
+      };
+
       return {
         content: [
           {
             type: 'text',
-            text: JSON.stringify(formattedResponse, null, 2),
+            text: JSON.stringify(enhancedResponse, null, 2),
           },
         ],
       };
@@ -481,6 +518,215 @@ export class PullRequestHandlers {
       };
     } catch (error) {
       return this.apiClient.handleApiError(error, `merging pull request ${pull_request_id} in ${workspace}/${repository}`);
+    }
+  }
+
+  private async fetchPullRequestComments(
+    workspace: string,
+    repository: string,
+    pullRequestId: number
+  ): Promise<{ comments: FormattedComment[]; activeCount: number; totalCount: number }> {
+    try {
+      let comments: FormattedComment[] = [];
+      let activeCount = 0;
+      let totalCount = 0;
+
+      if (this.apiClient.getIsServer()) {
+        // Helper function to process nested comments recursively
+        const processNestedComments = (comment: any, anchor: any): FormattedComment => {
+          const formattedComment: FormattedComment = {
+            id: comment.id,
+            author: comment.author.displayName,
+            text: comment.text,
+            created_on: new Date(comment.createdDate).toISOString(),
+            is_inline: !!anchor,
+            file_path: anchor?.path,
+            line_number: anchor?.line,
+            state: comment.state
+          };
+
+          // Process nested replies
+          if (comment.comments && comment.comments.length > 0) {
+            formattedComment.replies = comment.comments
+              .filter((reply: any) => {
+                // Apply same filters to replies
+                if (reply.state === 'RESOLVED') return false;
+                if (anchor && anchor.orphaned === true) return false;
+                return true;
+              })
+              .map((reply: any) => processNestedComments(reply, anchor));
+          }
+
+          return formattedComment;
+        };
+
+        // Helper to count all comments including nested ones
+        const countAllComments = (comment: any): number => {
+          let count = 1;
+          if (comment.comments && comment.comments.length > 0) {
+            count += comment.comments.reduce((sum: number, reply: any) => sum + countAllComments(reply), 0);
+          }
+          return count;
+        };
+
+        // Helper to count active comments including nested ones
+        const countActiveComments = (comment: any, anchor: any): number => {
+          let count = 0;
+          
+          // Check if this comment is active
+          if (comment.state !== 'RESOLVED' && (!anchor || anchor.orphaned !== true)) {
+            count = 1;
+          }
+          
+          // Count active nested comments
+          if (comment.comments && comment.comments.length > 0) {
+            count += comment.comments.reduce((sum: number, reply: any) => sum + countActiveComments(reply, anchor), 0);
+          }
+          
+          return count;
+        };
+
+        // Bitbucket Server API - fetch from activities
+        const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pullRequestId}/activities`;
+        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
+          params: { limit: 1000 }
+        });
+
+        const activities = response.values || [];
+        
+        // Filter for comment activities
+        const commentActivities = activities.filter((a: any) => 
+          a.action === 'COMMENTED' && a.comment
+        );
+
+        // Count all comments including nested ones
+        totalCount = commentActivities.reduce((sum: number, activity: any) => {
+          return sum + countAllComments(activity.comment);
+        }, 0);
+
+        // Count active comments including nested ones
+        activeCount = commentActivities.reduce((sum: number, activity: any) => {
+          return sum + countActiveComments(activity.comment, activity.commentAnchor);
+        }, 0);
+
+        // Process top-level comments and their nested replies
+        const processedComments = commentActivities
+          .filter((a: any) => {
+            const c = a.comment;
+            const anchor = a.commentAnchor;
+            
+            // Skip resolved comments
+            if (c.state === 'RESOLVED') return false;
+            
+            // Skip orphaned inline comments
+            if (anchor && anchor.orphaned === true) return false;
+            
+            return true;
+          })
+          .map((a: any) => processNestedComments(a.comment, a.commentAnchor));
+
+        // Limit to 20 top-level comments
+        comments = processedComments.slice(0, 20);
+      } else {
+        // Bitbucket Cloud API
+        const apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pullRequestId}/comments`;
+        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
+          params: { pagelen: 100 }
+        });
+
+        const allComments = response.values || [];
+        totalCount = allComments.length;
+
+        // Filter for active comments (not deleted or resolved) and limit to 20
+        const activeComments = allComments
+          .filter((c: BitbucketCloudComment) => !c.deleted && !c.resolved)
+          .slice(0, 20);
+
+        activeCount = allComments.filter((c: BitbucketCloudComment) => !c.deleted && !c.resolved).length;
+
+        comments = activeComments.map((c: BitbucketCloudComment) => ({
+          id: c.id,
+          author: c.user.display_name,
+          text: c.content.raw,
+          created_on: c.created_on,
+          is_inline: !!c.inline,
+          file_path: c.inline?.path,
+          line_number: c.inline?.to
+        }));
+      }
+
+      return { comments, activeCount, totalCount };
+    } catch (error) {
+      console.error('Failed to fetch comments:', error);
+      return { comments: [], activeCount: 0, totalCount: 0 };
+    }
+  }
+
+  private async fetchPullRequestFileChanges(
+    workspace: string,
+    repository: string,
+    pullRequestId: number
+  ): Promise<{ fileChanges: FormattedFileChange[]; summary: any }> {
+    try {
+      let fileChanges: FormattedFileChange[] = [];
+      let totalLinesAdded = 0;
+      let totalLinesRemoved = 0;
+
+      if (this.apiClient.getIsServer()) {
+        // Bitbucket Server API - use changes endpoint
+        const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pullRequestId}/changes`;
+        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
+          params: { limit: 1000 }
+        });
+
+        const changes = response.values || [];
+
+        fileChanges = changes.map((change: any) => {
+          let status: 'added' | 'modified' | 'removed' | 'renamed' = 'modified';
+          if (change.type === 'ADD') status = 'added';
+          else if (change.type === 'DELETE') status = 'removed';
+          else if (change.type === 'MOVE' || change.type === 'RENAME') status = 'renamed';
+
+          return {
+            path: change.path.toString,
+            status,
+            old_path: change.srcPath?.toString
+          };
+        });
+      } else {
+        // Bitbucket Cloud API - use diffstat endpoint (has line statistics)
+        const apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pullRequestId}/diffstat`;
+        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
+          params: { pagelen: 100 }
+        });
+
+        const diffstats = response.values || [];
+
+        fileChanges = diffstats.map((stat: BitbucketCloudFileChange) => {
+          totalLinesAdded += stat.lines_added;
+          totalLinesRemoved += stat.lines_removed;
+
+          return {
+            path: stat.path,
+            status: stat.type,
+            old_path: stat.old?.path
+          };
+        });
+      }
+
+      const summary = {
+        total_files: fileChanges.length
+      };
+
+      return { fileChanges, summary };
+    } catch (error) {
+      console.error('Failed to fetch file changes:', error);
+      return {
+        fileChanges: [],
+        summary: {
+          total_files: 0
+        }
+      };
     }
   }
 }

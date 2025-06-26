@@ -262,3 +262,93 @@ export interface MergeInfo {
   mergedAt?: string;
   mergeCommitMessage?: string;
 }
+
+// Comment types
+export interface BitbucketServerComment {
+  id: number;
+  version: number;
+  text: string;
+  author: {
+    name: string;
+    emailAddress: string;
+    displayName: string;
+  };
+  createdDate: number;
+  updatedDate: number;
+  state?: 'OPEN' | 'RESOLVED';
+  anchor?: {
+    line: number;
+    lineType: string;
+    fileType: string;
+    path: string;
+  };
+}
+
+export interface BitbucketCloudComment {
+  id: number;
+  content: {
+    raw: string;
+    markup: string;
+    html: string;
+  };
+  user: {
+    display_name: string;
+    account_id: string;
+  };
+  created_on: string;
+  updated_on: string;
+  deleted?: boolean;
+  resolved?: boolean;
+  inline?: {
+    to: number;
+    from?: number;
+    path: string;
+  };
+}
+
+// File change types
+export interface BitbucketServerFileChange {
+  path: {
+    toString: string;
+  };
+  executable: boolean;
+  percentUnchanged: number;
+  type: string;
+  nodeType: string;
+  srcPath?: {
+    toString: string;
+  };
+  linesAdded?: number;
+  linesRemoved?: number;
+}
+
+export interface BitbucketCloudFileChange {
+  path: string;
+  type: 'added' | 'modified' | 'removed' | 'renamed';
+  lines_added: number;
+  lines_removed: number;
+  old?: {
+    path: string;
+  };
+}
+
+// Formatted comment type for response
+export interface FormattedComment {
+  id: number;
+  author: string;
+  text: string;
+  created_on: string;
+  is_inline: boolean;
+  file_path?: string;
+  line_number?: number;
+  state?: 'OPEN' | 'RESOLVED';
+  parent_id?: number;  // For Bitbucket Cloud style replies
+  replies?: FormattedComment[];  // For Bitbucket Server nested replies
+}
+
+// Formatted file change type for response
+export interface FormattedFileChange {
+  path: string;
+  status: 'added' | 'modified' | 'removed' | 'renamed';
+  old_path?: string;
+}

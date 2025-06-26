@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2025-01-26
+
+### Added
+- Support for nested comment replies in Bitbucket Server
+  - Added `replies` field to `FormattedComment` interface to support nested comment threads
+  - Comments now include nested replies that are still relevant (not orphaned or resolved)
+  - Total and active comment counts now include nested replies
+
+### Changed
+- Updated comment fetching logic to handle Bitbucket Server's nested comment structure
+  - Server uses `comments` array inside each comment object for replies
+  - Cloud continues to use `parent` field for reply relationships
+- Improved comment filtering to exclude orphaned inline comments when code has changed
+
+### Fixed
+- Fixed missing comment replies in PR details - replies are now properly included in the response
+
+## [0.6.0] - 2025-01-26
+
+### Added
+- **Enhanced `get_pull_request` with active comments and file changes**:
+  - Fetches and displays active (unresolved) comments that need attention
+  - Shows up to 20 most recent active comments with:
+    - Comment text, author, and creation date
+    - Inline comment details (file path and line number)
+    - Comment state (OPEN/RESOLVED for Server)
+  - Provides comment counts:
+    - `active_comment_count`: Total unresolved comments
+    - `total_comment_count`: Total comments including resolved
+  - Includes file change statistics:
+    - List of all modified files with lines added/removed
+    - File status (added, modified, removed, renamed)
+    - Summary statistics (total files, lines added/removed)
+- Added new TypeScript interfaces for comments and file changes
+- Added `FormattedComment` and `FormattedFileChange` types for consistent response format
+
+### Changed
+- Modified `handleGetPullRequest` to make parallel API calls for better performance
+- Enhanced error handling to gracefully continue if comment/file fetching fails
+
 ## [0.5.0] - 2025-01-21
 
 ### Added
