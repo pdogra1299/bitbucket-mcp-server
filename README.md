@@ -264,10 +264,18 @@ Returns a paginated list of pull requests with:
     "title": "Updated title",  // Optional
     "description": "Updated description",  // Optional
     "destination_branch": "develop",  // Optional
-    "reviewers": ["new.reviewer"]  // Optional - replaces existing reviewers
+    "reviewers": ["new.reviewer"]  // Optional - see note below
   }
 }
 ```
+
+**Important Note on Reviewers:**
+- When updating a PR without specifying the `reviewers` parameter, existing reviewers and their approval status are preserved
+- When providing the `reviewers` parameter:
+  - The reviewer list is replaced with the new list
+  - For reviewers that already exist on the PR, their approval status is preserved
+  - New reviewers are added without approval status
+- This prevents accidentally removing reviewers when you only want to update the PR description or title
 
 ### Add Comment
 

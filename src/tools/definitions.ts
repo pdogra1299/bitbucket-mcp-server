@@ -101,7 +101,7 @@ export const toolDefinitions = [
   },
   {
     name: 'update_pull_request',
-    description: 'Update an existing pull request',
+    description: 'Update an existing pull request. When updating without specifying reviewers, existing reviewers and their approval status will be preserved.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -132,7 +132,7 @@ export const toolDefinitions = [
         reviewers: {
           type: 'array',
           items: { type: 'string' },
-          description: 'New list of reviewer usernames/emails (optional)',
+          description: 'New list of reviewer usernames/emails. If provided, replaces the reviewer list (preserving approval status for existing reviewers). If omitted, existing reviewers are preserved. (optional)',
         },
       },
       required: ['workspace', 'repository', 'pull_request_id'],

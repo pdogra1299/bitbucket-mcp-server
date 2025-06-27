@@ -348,7 +348,7 @@ export class PullRequestHandlers {
         // Bitbucket Server API
         apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}`;
         
-        // First get the current PR to get version number
+        // First get the current PR to get version number and existing data
         const currentPr = await this.apiClient.makeRequest<any>('get', apiPath);
         
         requestBody.version = currentPr.version;
@@ -365,8 +365,28 @@ export class PullRequestHandlers {
             }
           };
         }
+        
+        // Handle reviewers: preserve existing ones if not explicitly updating
         if (reviewers !== undefined) {
-          requestBody.reviewers = reviewers.map(r => ({ user: { name: r } }));
+          // User wants to update reviewers
+          // Create a map of existing reviewers for preservation of approval status
+          const existingReviewersMap = new Map(
+            currentPr.reviewers.map((r: any) => [r.user.name, r])
+          );
+          
+          requestBody.reviewers = reviewers.map(username => {
+            const existing = existingReviewersMap.get(username);
+            if (existing) {
+              // Preserve existing reviewer's full data including approval status
+              return existing;
+            } else {
+              // Add new reviewer (without approval status)
+              return { user: { name: username } };
+            }
+          });
+        } else {
+          // No reviewers provided - preserve existing reviewers with their full data
+          requestBody.reviewers = currentPr.reviewers;
         }
       } else {
         // Bitbucket Cloud API

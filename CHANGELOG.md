@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2025-01-27
+
+### Fixed
+- **Fixed `update_pull_request` reviewer preservation**:
+  - When updating a PR without specifying reviewers, existing reviewers are now preserved
+  - Previously, omitting the `reviewers` parameter would clear all reviewers
+  - Now properly includes existing reviewers in the API request when not explicitly updating them
+  - When updating reviewers, approval status is preserved for existing reviewers
+  - This prevents accidentally removing reviewers when only updating PR title or description
+
+### Changed
+- Updated tool documentation to clarify reviewer behavior in `update_pull_request`
+- Enhanced README with detailed explanation of reviewer handling
+
 ## [0.9.0] - 2025-01-26
 
 ### Added
