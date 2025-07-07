@@ -16,12 +16,14 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 - `update_pull_request` - Update PR details (title, description, reviewers, destination branch)
 - `add_comment` - Add comments to pull requests (supports replies)
 - `merge_pull_request` - Merge pull requests with various strategies
+- `list_pr_commits` - List all commits that are part of a pull request
 - `delete_branch` - Delete branches after merge
 
 #### Branch Management Tools
 - `list_branches` - List branches with filtering and pagination
 - `delete_branch` - Delete branches (with protection checks)
 - `get_branch` - Get detailed branch information including associated PRs
+- `list_branch_commits` - List commits in a branch with advanced filtering
 
 #### File and Directory Tools
 - `list_directory_content` - List files and directories in a repository path
@@ -595,6 +597,184 @@ This tool is particularly useful for:
 - Getting an overview of branch activity
 - Understanding PR review status
 - Identifying stale branches
+
+### List Branch Commits
+
+Get all commits in a specific branch with advanced filtering options:
+
+```typescript
+// Basic usage - get recent commits
+{
+  "tool": "list_branch_commits",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "branch_name": "feature/new-feature",
+    "limit": 50  // Optional (default: 25)
+  }
+}
+
+// Filter by date range
+{
+  "tool": "list_branch_commits",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "branch_name": "main",
+    "since": "2025-01-01T00:00:00Z",  // ISO date string
+    "until": "2025-01-15T23:59:59Z"   // ISO date string
+  }
+}
+
+// Filter by author
+{
+  "tool": "list_branch_commits",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "branch_name": "develop",
+    "author": "john.doe@company.com",  // Email or username
+    "limit": 100
+  }
+}
+
+// Exclude merge commits
+{
+  "tool": "list_branch_commits",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "branch_name": "release/v2.0",
+    "include_merge_commits": false
+  }
+}
+
+// Search in commit messages
+{
+  "tool": "list_branch_commits",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "branch_name": "main",
+    "search": "bugfix",  // Search in commit messages
+    "limit": 50
+  }
+}
+
+// Combine multiple filters
+{
+  "tool": "list_branch_commits",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "branch_name": "develop",
+    "author": "jane.smith@company.com",
+    "since": "2025-01-01T00:00:00Z",
+    "include_merge_commits": false,
+    "search": "feature",
+    "limit": 100,
+    "start": 0  // For pagination
+  }
+}
+```
+
+**Filter Parameters:**
+- `since`: ISO date string - only show commits after this date
+- `until`: ISO date string - only show commits before this date
+- `author`: Filter by author email/username
+- `include_merge_commits`: Boolean to include/exclude merge commits (default: true)
+- `search`: Search for text in commit messages
+
+Returns detailed commit information:
+```json
+{
+  "branch_name": "feature/new-feature",
+  "branch_head": "abc123def456",  // Latest commit hash
+  "commits": [
+    {
+      "hash": "abc123def456",
+      "abbreviated_hash": "abc123d",
+      "message": "Add new feature implementation",
+      "author": {
+        "name": "John Doe",
+        "email": "john.doe@example.com"
+      },
+      "date": "2025-01-03T10:30:00Z",
+      "parents": ["parent1hash", "parent2hash"],
+      "is_merge_commit": false
+    }
+    // ... more commits
+  ],
+  "total_count": 150,
+  "start": 0,
+  "limit": 25,
+  "has_more": true,
+  "next_start": 25,
+  "filters_applied": {
+    "author": "john.doe@example.com",
+    "since": "2025-01-01",
+    "include_merge_commits": false
+  }
+}
+```
+
+This tool is particularly useful for:
+- Reviewing commit history before releases
+- Finding commits by specific authors
+- Tracking changes within date ranges
+- Searching for specific features or fixes
+- Analyzing branch activity patterns
+
+### List PR Commits
+
+Get all commits that are part of a pull request:
+
+```typescript
+{
+  "tool": "list_pr_commits",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "limit": 50,  // Optional (default: 25)
+    "start": 0    // Optional: for pagination
+  }
+}
+```
+
+Returns commit information for the PR:
+```json
+{
+  "pull_request_id": 123,
+  "pull_request_title": "Add awesome feature",
+  "commits": [
+    {
+      "hash": "def456ghi789",
+      "abbreviated_hash": "def456g",
+      "message": "Initial implementation",
+      "author": {
+        "name": "Jane Smith",
+        "email": "jane.smith@example.com"
+      },
+      "date": "2025-01-02T14:20:00Z",
+      "parents": ["parent1hash"],
+      "is_merge_commit": false
+    }
+    // ... more commits
+  ],
+  "total_count": 5,
+  "start": 0,
+  "limit": 25,
+  "has_more": false
+}
+```
+
+This tool is particularly useful for:
+- Reviewing all changes in a PR before merging
+- Understanding the development history of a PR
+- Checking commit messages for quality
+- Verifying authorship of changes
+- Analyzing PR complexity by commit count
 
 ### Get Pull Request Diff
 

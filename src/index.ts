@@ -40,7 +40,7 @@ class BitbucketMCPServer {
     this.server = new Server(
       {
         name: 'bitbucket-mcp-server',
-        version: '0.9.1',
+        version: '0.10.0',
       },
       {
         capabilities: {
@@ -99,6 +99,8 @@ class BitbucketMCPServer {
           return this.pullRequestHandlers.handleAddComment(request.params.arguments);
         case 'merge_pull_request':
           return this.pullRequestHandlers.handleMergePullRequest(request.params.arguments);
+        case 'list_pr_commits':
+          return this.pullRequestHandlers.handleListPrCommits(request.params.arguments);
         
         // Branch tools
         case 'list_branches':
@@ -107,6 +109,8 @@ class BitbucketMCPServer {
           return this.branchHandlers.handleDeleteBranch(request.params.arguments);
         case 'get_branch':
           return this.branchHandlers.handleGetBranch(request.params.arguments);
+        case 'list_branch_commits':
+          return this.branchHandlers.handleListBranchCommits(request.params.arguments);
         
         // Code Review tools
         case 'get_pull_request_diff':

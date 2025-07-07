@@ -1,4 +1,11 @@
-import { BitbucketServerPullRequest, BitbucketCloudPullRequest, MergeInfo } from '../types/bitbucket.js';
+import { 
+  BitbucketServerPullRequest, 
+  BitbucketCloudPullRequest, 
+  MergeInfo,
+  BitbucketServerCommit,
+  BitbucketCloudCommit,
+  FormattedCommit
+} from '../types/bitbucket.js';
 
 export function formatServerResponse(
   pr: BitbucketServerPullRequest,
@@ -72,5 +79,40 @@ export function formatCloudResponse(pr: BitbucketCloudPullRequest): any {
     merged_at: pr.state === 'MERGED' ? pr.updated_on : null,
     merge_commit_message: null, // Would need additional API call to get this
     close_source_branch: pr.close_source_branch,
+  };
+}
+
+export function formatServerCommit(commit: BitbucketServerCommit): FormattedCommit {
+  return {
+    hash: commit.id,
+    abbreviated_hash: commit.displayId,
+    message: commit.message,
+    author: {
+      name: commit.author.name,
+      email: commit.author.emailAddress,
+    },
+    date: new Date(commit.authorTimestamp).toISOString(),
+    parents: commit.parents.map(p => p.id),
+    is_merge_commit: commit.parents.length > 1,
+  };
+}
+
+export function formatCloudCommit(commit: BitbucketCloudCommit): FormattedCommit {
+  // Parse the author raw string which is in format "Name <email>"
+  const authorMatch = commit.author.raw.match(/^(.+?)\s*<(.+?)>$/);
+  const authorName = authorMatch ? authorMatch[1] : (commit.author.user?.display_name || commit.author.raw);
+  const authorEmail = authorMatch ? authorMatch[2] : '';
+
+  return {
+    hash: commit.hash,
+    abbreviated_hash: commit.hash.substring(0, 7),
+    message: commit.message,
+    author: {
+      name: authorName,
+      email: authorEmail,
+    },
+    date: commit.date,
+    parents: commit.parents.map(p => p.hash),
+    is_merge_commit: commit.parents.length > 1,
   };
 }

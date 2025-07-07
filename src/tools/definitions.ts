@@ -527,4 +527,84 @@ export const toolDefinitions = [
       required: ['workspace', 'repository', 'file_path'],
     },
   },
+  {
+    name: 'list_branch_commits',
+    description: 'List commits in a branch with detailed information and filtering options',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        branch_name: {
+          type: 'string',
+          description: 'Branch name to get commits from',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of commits to return (default: 25)',
+        },
+        start: {
+          type: 'number',
+          description: 'Start index for pagination (default: 0)',
+        },
+        since: {
+          type: 'string',
+          description: 'ISO date string - only show commits after this date (optional)',
+        },
+        until: {
+          type: 'string',
+          description: 'ISO date string - only show commits before this date (optional)',
+        },
+        author: {
+          type: 'string',
+          description: 'Filter by author email/username (optional)',
+        },
+        include_merge_commits: {
+          type: 'boolean',
+          description: 'Include merge commits in results (default: true)',
+        },
+        search: {
+          type: 'string',
+          description: 'Search for text in commit messages (optional)',
+        },
+      },
+      required: ['workspace', 'repository', 'branch_name'],
+    },
+  },
+  {
+    name: 'list_pr_commits',
+    description: 'List all commits that are part of a pull request',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        pull_request_id: {
+          type: 'number',
+          description: 'Pull request ID',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of commits to return (default: 25)',
+        },
+        start: {
+          type: 'number',
+          description: 'Start index for pagination (default: 0)',
+        },
+      },
+      required: ['workspace', 'repository', 'pull_request_id'],
+    },
+  },
 ];

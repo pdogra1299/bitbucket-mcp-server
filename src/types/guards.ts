@@ -261,3 +261,47 @@ export const isGetFileContentArgs = (
   (args.start_line === undefined || typeof args.start_line === 'number') &&
   (args.line_count === undefined || typeof args.line_count === 'number') &&
   (args.full_content === undefined || typeof args.full_content === 'boolean');
+
+export const isListBranchCommitsArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  branch_name: string;
+  limit?: number;
+  start?: number;
+  since?: string;
+  until?: string;
+  author?: string;
+  include_merge_commits?: boolean;
+  search?: string;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.branch_name === 'string' &&
+  (args.limit === undefined || typeof args.limit === 'number') &&
+  (args.start === undefined || typeof args.start === 'number') &&
+  (args.since === undefined || typeof args.since === 'string') &&
+  (args.until === undefined || typeof args.until === 'string') &&
+  (args.author === undefined || typeof args.author === 'string') &&
+  (args.include_merge_commits === undefined || typeof args.include_merge_commits === 'boolean') &&
+  (args.search === undefined || typeof args.search === 'string');
+
+export const isListPrCommitsArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  pull_request_id: number;
+  limit?: number;
+  start?: number;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.pull_request_id === 'number' &&
+  (args.limit === undefined || typeof args.limit === 'number') &&
+  (args.start === undefined || typeof args.start === 'number');

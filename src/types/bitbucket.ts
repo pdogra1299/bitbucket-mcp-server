@@ -384,3 +384,62 @@ export interface MultipleMatchesError {
   }>;
   suggestion: string;
 }
+
+// Commit types
+export interface BitbucketServerCommit {
+  id: string;
+  displayId: string;
+  message: string;
+  author: {
+    name: string;
+    emailAddress: string;
+  };
+  authorTimestamp: number;
+  committer?: {
+    name: string;
+    emailAddress: string;
+  };
+  committerTimestamp?: number;
+  parents: Array<{
+    id: string;
+    displayId: string;
+  }>;
+}
+
+export interface BitbucketCloudCommit {
+  hash: string;
+  message: string;
+  author: {
+    raw: string;
+    user?: {
+      display_name: string;
+      account_id: string;
+    };
+  };
+  date: string;
+  parents: Array<{
+    hash: string;
+    type: string;
+  }>;
+  links?: {
+    self: {
+      href: string;
+    };
+    html: {
+      href: string;
+    };
+  };
+}
+
+export interface FormattedCommit {
+  hash: string;
+  abbreviated_hash: string;
+  message: string;
+  author: {
+    name: string;
+    email: string;
+  };
+  date: string;
+  parents: string[];
+  is_merge_commit: boolean;
+}

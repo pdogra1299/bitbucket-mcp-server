@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2025-07-03
+
+### Added
+- **New `list_branch_commits` tool for retrieving commit history**:
+  - List all commits in a specific branch with detailed information
+  - Advanced filtering options:
+    - `since` and `until` parameters for date range filtering (ISO date strings)
+    - `author` parameter to filter by author email/username
+    - `include_merge_commits` parameter to include/exclude merge commits (default: true)
+    - `search` parameter to search in commit messages
+  - Returns branch head information and paginated commit list
+  - Each commit includes hash, message, author details, date, parents, and merge status
+  - Supports both Bitbucket Server and Cloud APIs with appropriate parameter mapping
+  - Useful for reviewing commit history, tracking changes, and analyzing branch activity
+
+- **New `list_pr_commits` tool for pull request commits**:
+  - List all commits that are part of a specific pull request
+  - Returns PR title and paginated commit list
+  - Simpler than branch commits - focused specifically on PR changes
+  - Each commit includes same detailed information as branch commits
+  - Supports pagination with `limit` and `start` parameters
+  - Useful for reviewing all changes in a PR before merging
+
+### Changed
+- Added new TypeScript interfaces for commit types:
+  - `BitbucketServerCommit` and `BitbucketCloudCommit` for API responses
+  - `FormattedCommit` for consistent commit representation
+- Added formatter functions `formatServerCommit` and `formatCloudCommit` for unified output
+- Enhanced type guards with `isListBranchCommitsArgs` and `isListPrCommitsArgs`
+
 ## [0.9.1] - 2025-01-27
 
 ### Fixed

@@ -3,9 +3,17 @@ import { BitbucketApiClient } from '../utils/api-client.js';
 import {
   isListBranchesArgs,
   isDeleteBranchArgs,
-  isGetBranchArgs
+  isGetBranchArgs,
+  isListBranchCommitsArgs
 } from '../types/guards.js';
-import { BitbucketServerBranch, BitbucketCloudBranch } from '../types/bitbucket.js';
+import { 
+  BitbucketServerBranch, 
+  BitbucketCloudBranch,
+  BitbucketServerCommit,
+  BitbucketCloudCommit,
+  FormattedCommit
+} from '../types/bitbucket.js';
+import { formatServerCommit, formatCloudCommit } from '../utils/formatters.js';
 
 export class BranchHandlers {
   constructor(
@@ -390,6 +398,190 @@ export class BranchHandlers {
         };
       }
       return this.apiClient.handleApiError(error, `getting branch '${branch_name}' in ${workspace}/${repository}`);
+    }
+  }
+
+  async handleListBranchCommits(args: any) {
+    if (!isListBranchCommitsArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for list_branch_commits'
+      );
+    }
+
+    const { 
+      workspace, 
+      repository, 
+      branch_name, 
+      limit = 25, 
+      start = 0,
+      since,
+      until,
+      author,
+      include_merge_commits = true,
+      search
+    } = args;
+
+    try {
+      let apiPath: string;
+      let params: any = {};
+      let commits: FormattedCommit[] = [];
+      let totalCount = 0;
+      let nextPageStart: number | null = null;
+
+      if (this.apiClient.getIsServer()) {
+        // Bitbucket Server API
+        apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/commits`;
+        params = {
+          until: `refs/heads/${branch_name}`,
+          limit,
+          start,
+          withCounts: true
+        };
+
+        // Add filters
+        if (since) {
+          params.since = since;
+        }
+        if (!include_merge_commits) {
+          params.merges = 'exclude';
+        }
+
+        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
+
+        // Format commits
+        commits = (response.values || []).map((commit: BitbucketServerCommit) => formatServerCommit(commit));
+        
+        // Apply client-side filters for Server API
+        if (author) {
+          // Filter by author email or name
+          commits = commits.filter(c => 
+            c.author.email === author || 
+            c.author.name === author ||
+            c.author.email.toLowerCase() === author.toLowerCase() ||
+            c.author.name.toLowerCase() === author.toLowerCase()
+          );
+        }
+        
+        // Filter by date if 'until' is provided (Server API doesn't support 'until' param directly)
+        if (until) {
+          const untilDate = new Date(until).getTime();
+          commits = commits.filter(c => new Date(c.date).getTime() <= untilDate);
+        }
+
+        // Filter by message search if provided
+        if (search) {
+          const searchLower = search.toLowerCase();
+          commits = commits.filter(c => c.message.toLowerCase().includes(searchLower));
+        }
+
+        // If we applied client-side filters, update the total count
+        if (author || until || search) {
+          totalCount = commits.length;
+          // Can't determine if there are more results when filtering client-side
+          nextPageStart = null;
+        } else {
+          totalCount = response.size || commits.length;
+          if (!response.isLastPage && response.nextPageStart !== undefined) {
+            nextPageStart = response.nextPageStart;
+          }
+        }
+      } else {
+        // Bitbucket Cloud API
+        apiPath = `/repositories/${workspace}/${repository}/commits/${encodeURIComponent(branch_name)}`;
+        params = {
+          pagelen: limit,
+          page: Math.floor(start / limit) + 1
+        };
+
+        // Build query string for filters
+        const queryParts: string[] = [];
+        if (author) {
+          queryParts.push(`author.raw ~ "${author}"`);
+        }
+        if (!include_merge_commits) {
+          // Cloud API doesn't have direct merge exclusion, we'll filter client-side
+        }
+        if (queryParts.length > 0) {
+          params.q = queryParts.join(' AND ');
+        }
+
+        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
+
+        // Format commits
+        let cloudCommits = (response.values || []).map((commit: BitbucketCloudCommit) => formatCloudCommit(commit));
+
+        // Apply client-side filters
+        if (!include_merge_commits) {
+          cloudCommits = cloudCommits.filter((c: FormattedCommit) => !c.is_merge_commit);
+        }
+        if (since) {
+          const sinceDate = new Date(since).getTime();
+          cloudCommits = cloudCommits.filter((c: FormattedCommit) => new Date(c.date).getTime() >= sinceDate);
+        }
+        if (until) {
+          const untilDate = new Date(until).getTime();
+          cloudCommits = cloudCommits.filter((c: FormattedCommit) => new Date(c.date).getTime() <= untilDate);
+        }
+        if (search) {
+          const searchLower = search.toLowerCase();
+          cloudCommits = cloudCommits.filter((c: FormattedCommit) => c.message.toLowerCase().includes(searchLower));
+        }
+
+        commits = cloudCommits;
+        totalCount = response.size || commits.length;
+        if (response.next) {
+          nextPageStart = start + limit;
+        }
+      }
+
+      // Get branch head info
+      let branchHead: string | null = null;
+      try {
+        if (this.apiClient.getIsServer()) {
+          const branchesPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/branches`;
+          const branchesResponse = await this.apiClient.makeRequest<any>('get', branchesPath, undefined, {
+            params: { filterText: branch_name, limit: 1 }
+          });
+          const branch = branchesResponse.values?.find((b: any) => b.displayId === branch_name);
+          branchHead = branch?.latestCommit || null;
+        } else {
+          const branchPath = `/repositories/${workspace}/${repository}/refs/branches/${encodeURIComponent(branch_name)}`;
+          const branch = await this.apiClient.makeRequest<any>('get', branchPath);
+          branchHead = branch.target?.hash || null;
+        }
+      } catch (e) {
+        // Ignore error, branch head is optional
+      }
+
+      // Build filters applied summary
+      const filtersApplied: any = {};
+      if (author) filtersApplied.author = author;
+      if (since) filtersApplied.since = since;
+      if (until) filtersApplied.until = until;
+      if (include_merge_commits !== undefined) filtersApplied.include_merge_commits = include_merge_commits;
+      if (search) filtersApplied.search = search;
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              branch_name,
+              branch_head: branchHead,
+              commits,
+              total_count: totalCount,
+              start,
+              limit,
+              has_more: nextPageStart !== null,
+              next_start: nextPageStart,
+              filters_applied: filtersApplied
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return this.apiClient.handleApiError(error, `listing commits for branch '${branch_name}' in ${workspace}/${repository}`);
     }
   }
 }

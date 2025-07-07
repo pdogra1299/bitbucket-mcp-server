@@ -1,6 +1,6 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { BitbucketApiClient } from '../utils/api-client.js';
-import { formatServerResponse, formatCloudResponse } from '../utils/formatters.js';
+import { formatServerResponse, formatCloudResponse, formatServerCommit, formatCloudCommit } from '../utils/formatters.js';
 import { formatSuggestionComment } from '../utils/suggestion-formatter.js';
 import { DiffParser } from '../utils/diff-parser.js';
 import { 
@@ -13,7 +13,10 @@ import {
   FormattedComment,
   FormattedFileChange,
   CodeMatch,
-  MultipleMatchesError
+  MultipleMatchesError,
+  BitbucketServerCommit,
+  BitbucketCloudCommit,
+  FormattedCommit
 } from '../types/bitbucket.js';
 import {
   isGetPullRequestArgs,
@@ -21,7 +24,8 @@ import {
   isCreatePullRequestArgs,
   isUpdatePullRequestArgs,
   isAddCommentArgs,
-  isMergePullRequestArgs
+  isMergePullRequestArgs,
+  isListPrCommitsArgs
 } from '../types/guards.js';
 
 export class PullRequestHandlers {
@@ -1112,5 +1116,94 @@ export class PullRequestHandlers {
 
   private selectBestMatch(matches: CodeMatch[]): CodeMatch {
     return matches.sort((a, b) => b.confidence - a.confidence)[0];
+  }
+
+  async handleListPrCommits(args: any) {
+    if (!isListPrCommitsArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for list_pr_commits'
+      );
+    }
+
+    const { workspace, repository, pull_request_id, limit = 25, start = 0 } = args;
+
+    try {
+      // First get the PR details to include in response
+      const prPath = this.apiClient.getIsServer()
+        ? `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}`
+        : `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}`;
+      
+      let prTitle = '';
+      try {
+        const pr = await this.apiClient.makeRequest<any>('get', prPath);
+        prTitle = pr.title;
+      } catch (e) {
+        // Ignore error, PR title is optional
+      }
+
+      let apiPath: string;
+      let params: any = {};
+      let commits: FormattedCommit[] = [];
+      let totalCount = 0;
+      let nextPageStart: number | null = null;
+
+      if (this.apiClient.getIsServer()) {
+        // Bitbucket Server API
+        apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/commits`;
+        params = {
+          limit,
+          start,
+          withCounts: true
+        };
+
+        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
+
+        // Format commits
+        commits = (response.values || []).map((commit: BitbucketServerCommit) => formatServerCommit(commit));
+
+        totalCount = response.size || commits.length;
+        if (!response.isLastPage && response.nextPageStart !== undefined) {
+          nextPageStart = response.nextPageStart;
+        }
+      } else {
+        // Bitbucket Cloud API
+        apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/commits`;
+        params = {
+          pagelen: limit,
+          page: Math.floor(start / limit) + 1
+        };
+
+        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
+
+        // Format commits
+        commits = (response.values || []).map((commit: BitbucketCloudCommit) => formatCloudCommit(commit));
+
+        totalCount = response.size || commits.length;
+        if (response.next) {
+          nextPageStart = start + limit;
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              pull_request_id,
+              pull_request_title: prTitle,
+              commits,
+              total_count: totalCount,
+              start,
+              limit,
+              has_more: nextPageStart !== null,
+              next_start: nextPageStart
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return this.apiClient.handleApiError(error, `listing commits for pull request ${pull_request_id} in ${workspace}/${repository}`);
+    }
   }
 }
