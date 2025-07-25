@@ -1,10 +1,12 @@
-import { 
-  BitbucketServerPullRequest, 
-  BitbucketCloudPullRequest, 
+import {
+  BitbucketServerPullRequest,
+  BitbucketCloudPullRequest,
   MergeInfo,
   BitbucketServerCommit,
   BitbucketCloudCommit,
-  FormattedCommit
+  FormattedCommit,
+  BitbucketServerSearchResult,
+  FormattedSearchResult
 } from '../types/bitbucket.js';
 
 export function formatServerResponse(
@@ -115,4 +117,137 @@ export function formatCloudCommit(commit: BitbucketCloudCommit): FormattedCommit
     parents: commit.parents.map(p => p.hash),
     is_merge_commit: commit.parents.length > 1,
   };
+}
+
+export function formatSearchResults(searchResult: BitbucketServerSearchResult): FormattedSearchResult[] {
+  const results: FormattedSearchResult[] = [];
+  
+  if (!searchResult.code?.values) {
+    return results;
+  }
+
+  for (const value of searchResult.code.values) {
+    // Extract file name from path
+    const fileName = value.file.split('/').pop() || value.file;
+    
+    const formattedResult: FormattedSearchResult = {
+      file_path: value.file,
+      file_name: fileName,
+      repository: value.repository.slug,
+      project: value.repository.project.key,
+      matches: []
+    };
+
+    // Process hitContexts (array of arrays of line contexts)
+    if (value.hitContexts && value.hitContexts.length > 0) {
+      for (const contextGroup of value.hitContexts) {
+        for (const lineContext of contextGroup) {
+          // Parse HTML to extract text and highlight information
+          const { text, segments } = parseHighlightedText(lineContext.text);
+          
+          formattedResult.matches.push({
+            line_number: lineContext.line,
+            line_content: text,
+            highlighted_segments: segments
+          });
+        }
+      }
+    }
+
+    results.push(formattedResult);
+  }
+
+  return results;
+}
+
+// Helper function to parse HTML-formatted text with <em> tags
+function parseHighlightedText(htmlText: string): {
+  text: string;
+  segments: Array<{ text: string; is_match: boolean }>;
+} {
+  // Decode HTML entities
+  const decodedText = htmlText
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&#x2F;/g, '/');
+
+  // Remove HTML tags and track highlighted segments
+  const segments: Array<{ text: string; is_match: boolean }> = [];
+  let plainText = '';
+  let currentPos = 0;
+
+  // Match all <em> tags and their content
+  const emRegex = /<em>(.*?)<\/em>/g;
+  let lastEnd = 0;
+  let match;
+
+  while ((match = emRegex.exec(decodedText)) !== null) {
+    // Add non-highlighted text before this match
+    if (match.index > lastEnd) {
+      const beforeText = decodedText.substring(lastEnd, match.index);
+      segments.push({ text: beforeText, is_match: false });
+      plainText += beforeText;
+    }
+
+    // Add highlighted text
+    const highlightedText = match[1];
+    segments.push({ text: highlightedText, is_match: true });
+    plainText += highlightedText;
+
+    lastEnd = match.index + match[0].length;
+  }
+
+  // Add any remaining non-highlighted text
+  if (lastEnd < decodedText.length) {
+    const remainingText = decodedText.substring(lastEnd);
+    segments.push({ text: remainingText, is_match: false });
+    plainText += remainingText;
+  }
+
+  // If no <em> tags were found, the entire text is non-highlighted
+  if (segments.length === 0) {
+    segments.push({ text: decodedText, is_match: false });
+    plainText = decodedText;
+  }
+
+  return { text: plainText, segments };
+}
+
+// Simplified formatter for MCP tool output
+export function formatCodeSearchOutput(searchResult: BitbucketServerSearchResult): string {
+  if (!searchResult.code?.values || searchResult.code.values.length === 0) {
+    return 'No results found';
+  }
+
+  const outputLines: string[] = [];
+  
+  for (const value of searchResult.code.values) {
+    outputLines.push(`File: ${value.file}`);
+    
+    // Process all hit contexts
+    if (value.hitContexts && value.hitContexts.length > 0) {
+      for (const contextGroup of value.hitContexts) {
+        for (const lineContext of contextGroup) {
+          // Remove HTML tags and decode entities
+          const cleanText = lineContext.text
+            .replace(/<em>/g, '')
+            .replace(/<\/em>/g, '')
+            .replace(/&quot;/g, '"')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&amp;/g, '&')
+            .replace(/&#x2F;/g, '/')
+            .replace(/&#x27;/g, "'");
+          
+          outputLines.push(`  Line ${lineContext.line}: ${cleanText}`);
+        }
+      }
+    }
+    
+    outputLines.push(''); // Empty line between files
+  }
+  
+  return outputLines.join('\n').trim();
 }

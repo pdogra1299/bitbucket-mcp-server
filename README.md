@@ -36,6 +36,9 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 - `request_changes` - Request changes on a pull request
 - `remove_requested_changes` - Remove change request from a pull request
 
+#### Search Tools
+- `search_code` - Search for code across repositories (currently Bitbucket Server only)
+
 ## Installation
 
 ### Using npx (Recommended)
@@ -210,6 +213,91 @@ Returns detailed information about the pull request including:
   - `file_changes_summary`: Summary statistics
     - Total files changed
 - And more...
+
+### Search Code
+
+Search for code across Bitbucket repositories (currently only supported for Bitbucket Server):
+
+```typescript
+// Search in a specific repository
+{
+  "tool": "search_code",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "search_query": "TODO",
+    "limit": 50
+  }
+}
+
+// Search across all repositories in a workspace
+{
+  "tool": "search_code",
+  "arguments": {
+    "workspace": "PROJ",
+    "search_query": "deprecated",
+    "file_pattern": "*.java",  // Optional: filter by file pattern
+    "limit": 100
+  }
+}
+
+// Search with file pattern filtering
+{
+  "tool": "search_code",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "frontend-app",
+    "search_query": "useState",
+    "file_pattern": "*.tsx",  // Only search in .tsx files
+    "start": 0,
+    "limit": 25
+  }
+}
+```
+
+Returns search results with:
+- File path and name
+- Repository and project information
+- Matched lines with:
+  - Line number
+  - Full line content
+  - Highlighted segments showing exact matches
+- Pagination information
+
+Example response:
+```json
+{
+  "message": "Code search completed successfully",
+  "workspace": "PROJ",
+  "repository": "my-repo",
+  "search_query": "TODO",
+  "results": [
+    {
+      "file_path": "src/utils/helper.js",
+      "file_name": "helper.js",
+      "repository": "my-repo",
+      "project": "PROJ",
+      "matches": [
+        {
+          "line_number": 42,
+          "line_content": "    // TODO: Implement error handling",
+          "highlighted_segments": [
+            { "text": "    // ", "is_match": false },
+            { "text": "TODO", "is_match": true },
+            { "text": ": Implement error handling", "is_match": false }
+          ]
+        }
+      ]
+    }
+  ],
+  "total_count": 15,
+  "start": 0,
+  "limit": 50,
+  "has_more": false
+}
+```
+
+**Note**: This tool currently only works with Bitbucket Server. Bitbucket Cloud support is planned for a future release.
 
 ### List Pull Requests
 

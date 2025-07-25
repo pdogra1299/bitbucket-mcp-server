@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2025-07-25
+
+### Added
+- **New `search_code` tool for searching code across repositories**:
+  - Search for code snippets, functions, or any text within Bitbucket repositories
+  - Supports searching within a specific repository or across all repositories in a workspace
+  - File path pattern filtering with glob patterns (e.g., `*.java`, `src/**/*.ts`)
+  - Returns matched lines with highlighted segments showing exact matches
+  - Pagination support for large result sets
+  - Currently only supports Bitbucket Server (Cloud API support planned for future)
+- Added `SearchHandlers` class following the modular architecture pattern
+- Added TypeScript interfaces for search requests and responses
+- Added `formatSearchResults` formatter function for consistent output
+
+### Changed
+- Major version bump to 1.0.0 indicating stable API with comprehensive feature set
+- Enhanced documentation with search examples
+
 ## [0.10.0] - 2025-07-03
 
 ### Added

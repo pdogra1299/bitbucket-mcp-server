@@ -607,4 +607,38 @@ export const toolDefinitions = [
       required: ['workspace', 'repository', 'pull_request_id'],
     },
   },
+  {
+    name: 'search_code',
+    description: 'Search for code across Bitbucket repositories (currently only supported for Bitbucket Server)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug to search in (optional, searches all repos if not specified)',
+        },
+        search_query: {
+          type: 'string',
+          description: 'The search term or phrase to look for in code',
+        },
+        file_pattern: {
+          type: 'string',
+          description: 'File path pattern to filter results (e.g., "*.java", "src/**/*.ts") (optional)',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of results to return (default: 25)',
+        },
+        start: {
+          type: 'number',
+          description: 'Start index for pagination (default: 0)',
+        },
+      },
+      required: ['workspace', 'search_query'],
+    },
+  },
 ];

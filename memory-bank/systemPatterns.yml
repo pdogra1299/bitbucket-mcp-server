@@ -1,0 +1,107 @@
+# System Patterns - Bitbucket MCP Server
+
+architecture_overview:
+  high_level_architecture: |
+    MCP Server implementation with modular handler architecture.
+    Main server class delegates tool calls to specialized handlers.
+    Each handler manages a specific domain (PRs, branches, reviews, files, search).
+  
+  component_relationships: |
+    - BitbucketMCPServer (main) → Handler classes → BitbucketApiClient → Axios
+    - Tool definitions → MCP SDK → Client applications
+    - Type guards validate inputs → Handlers process → Formatters standardize output
+
+design_patterns:
+  - name: "Handler Pattern"
+    category: "architecture"
+    description: "Separate handler classes for different tool categories"
+    usage: "Organizing related tools and maintaining single responsibility"
+    implementation:
+      - "PullRequestHandlers for PR lifecycle"
+      - "BranchHandlers for branch operations"
+      - "ReviewHandlers for code review tools"
+      - "FileHandlers for file/directory operations"
+      - "SearchHandlers for code search"
+    example_files:
+      - "src/handlers/*.ts"
+    related_patterns:
+      - "Dependency Injection"
+
+  - name: "API Client Abstraction"
+    category: "integration"
+    description: "Unified client handling both Cloud and Server APIs"
+    usage: "Abstracting API differences between Bitbucket variants"
+    implementation:
+      - "Single makeRequest method for all HTTP operations"
+      - "Automatic auth header selection (Bearer vs Basic)"
+      - "Consistent error handling across variants"
+    example_files:
+      - "src/utils/api-client.ts"
+
+  - name: "Type Guard Pattern"
+    category: "validation"
+    description: "Runtime type checking for tool arguments"
+    usage: "Ensuring type safety for dynamic tool inputs"
+    implementation:
+      - "Guard functions return type predicates"
+      - "Comprehensive validation of required/optional fields"
+      - "Array and nested object validation"
+    example_files:
+      - "src/types/guards.ts"
+
+  - name: "Response Formatting"
+    category: "data_transformation"
+    description: "Consistent response formatting across API variants"
+    usage: "Normalizing different API response structures"
+    implementation:
+      - "formatServerResponse/formatCloudResponse for PRs"
+      - "Unified FormattedXXX interfaces"
+      - "Separate formatters for different data types"
+    example_files:
+      - "src/utils/formatters.ts"
+
+project_specific_patterns:
+  mcp_patterns:
+    - name: "Tool Definition Structure"
+      description: "Standardized tool definition with inputSchema"
+      implementation:
+        - "Name, description, and JSON schema for each tool"
+        - "Required vs optional parameter specification"
+        - "Enum constraints for valid values"
+    
+    - name: "Error Response Pattern"
+      description: "Consistent error handling and reporting"
+      implementation:
+        - "Return isError: true for tool failures"
+        - "Include detailed error messages"
+        - "Provide context-specific error details"
+
+  bitbucket_patterns:
+    - name: "Pagination Pattern"
+      description: "Consistent pagination across list operations"
+      implementation:
+        - "limit and start parameters"
+        - "has_more and next_start in responses"
+        - "total_count for result sets"
+    
+    - name: "Dual API Support"
+      description: "Supporting both Cloud and Server APIs"
+      implementation:
+        - "isServer flag determines API paths"
+        - "Different parameter names mapped appropriately"
+        - "Response structure normalization"
+
+  code_patterns:
+    - name: "Smart Truncation"
+      description: "Intelligent file content truncation"
+      implementation:
+        - "File type-based default limits"
+        - "Size-based automatic truncation"
+        - "Line range selection support"
+    
+    - name: "Code Snippet Matching"
+      description: "Finding line numbers from code snippets"
+      implementation:
+        - "Exact text matching with context"
+        - "Confidence scoring for multiple matches"
+        - "Strategy selection (strict vs best)"

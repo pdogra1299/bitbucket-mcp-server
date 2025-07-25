@@ -1,0 +1,47 @@
+# Project Brief - Bitbucket MCP Server
+
+project_name: "bitbucket-mcp-server"
+version: "1.0.0"
+description: "MCP (Model Context Protocol) server for Bitbucket API integration"
+primary_purpose: "Provide tools for interacting with Bitbucket APIs via MCP"
+
+key_features:
+  - "Support for both Bitbucket Cloud and Server"
+  - "19 comprehensive tools for PR management, branch operations, and code review"
+  - "Modular architecture with separate handlers for different tool categories"
+  - "Smart file content handling with automatic truncation"
+  - "Advanced PR commenting with code suggestions and snippet matching"
+  - "Code search functionality across repositories"
+
+scope:
+  included:
+    - "Pull Request lifecycle management"
+    - "Branch management and operations"
+    - "Code review and approval workflows"
+    - "File and directory operations"
+    - "Code search (Bitbucket Server only)"
+    - "Authentication via app passwords/tokens"
+  
+  excluded:
+    - "Repository creation/deletion"
+    - "User management"
+    - "Pipeline/build operations"
+    - "Wiki/documentation management"
+    - "Bitbucket Cloud code search (future enhancement)"
+
+constraints:
+  technical:
+    - "Node.js >= 16.0.0 required"
+    - "TypeScript with ES modules"
+    - "MCP SDK for protocol implementation"
+  
+  authentication:
+    - "Bitbucket Cloud: App passwords required"
+    - "Bitbucket Server: HTTP access tokens required"
+    - "Different username formats for Cloud vs Server"
+
+success_criteria:
+  - "Seamless integration with MCP-compatible clients"
+  - "Reliable API interactions with proper error handling"
+  - "Consistent response formatting across tools"
+  - "Maintainable and extensible codebase"

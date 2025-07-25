@@ -1,0 +1,51 @@
+# Product Context - Bitbucket MCP Server
+
+problem_statement: |
+  Developers using AI assistants need programmatic access to Bitbucket operations
+  without leaving their development environment. Manual API interactions are
+  time-consuming and error-prone.
+
+target_users:
+  primary:
+    - "Software developers using AI coding assistants"
+    - "DevOps engineers automating PR workflows"
+    - "Code reviewers needing efficient review tools"
+  
+  secondary:
+    - "Project managers tracking development progress"
+    - "QA engineers reviewing code changes"
+
+user_needs:
+  core:
+    - "Create and manage pull requests programmatically"
+    - "Review code changes with AI assistance"
+    - "Automate branch management tasks"
+    - "Search code across repositories"
+    - "Access file contents without cloning"
+  
+  workflow:
+    - "Comment on PRs with code suggestions"
+    - "Approve/request changes on PRs"
+    - "List and filter pull requests"
+    - "Get comprehensive PR details including comments"
+    - "Manage branch lifecycle"
+
+value_proposition:
+  - "Seamless Bitbucket integration within AI assistants"
+  - "Unified interface for Cloud and Server variants"
+  - "Time savings through automation"
+  - "Reduced context switching"
+  - "Enhanced code review quality with AI"
+
+user_experience_goals:
+  - "Simple tool invocation syntax"
+  - "Clear and consistent response formats"
+  - "Helpful error messages with recovery suggestions"
+  - "Smart defaults (pagination, truncation)"
+  - "Flexible filtering and search options"
+
+adoption_strategy:
+  - "npm package for easy installation"
+  - "Comprehensive documentation with examples"
+  - "Support for both Cloud and Server"
+  - "Gradual feature addition based on user needs"

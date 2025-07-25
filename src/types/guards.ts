@@ -305,3 +305,22 @@ export const isListPrCommitsArgs = (
   typeof args.pull_request_id === 'number' &&
   (args.limit === undefined || typeof args.limit === 'number') &&
   (args.start === undefined || typeof args.start === 'number');
+
+export const isSearchCodeArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository?: string;
+  search_query: string;
+  file_pattern?: string;
+  limit?: number;
+  start?: number;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.search_query === 'string' &&
+  (args.repository === undefined || typeof args.repository === 'string') &&
+  (args.file_pattern === undefined || typeof args.file_pattern === 'string') &&
+  (args.limit === undefined || typeof args.limit === 'number') &&
+  (args.start === undefined || typeof args.start === 'number');

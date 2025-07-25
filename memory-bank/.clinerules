@@ -1,0 +1,133 @@
+# Bitbucket MCP Server - Project Intelligence
+
+## Critical Implementation Paths
+
+### Adding New Tools
+1. Create handler in src/handlers/ following existing patterns
+2. Add TypeScript interfaces in src/types/bitbucket.ts
+3. Add type guard in src/types/guards.ts
+4. Add formatter in src/utils/formatters.ts if needed
+5. Register tool in src/tools/definitions.ts
+6. Wire handler in src/index.ts
+7. Update version, CHANGELOG.md, and README.md
+
+### API Variant Handling
+- Always check `apiClient.getIsServer()` for Cloud vs Server
+- Server uses `/rest/api/1.0/` prefix
+- Cloud uses direct paths under base URL
+- Different parameter names (e.g., pagelen vs limit)
+
+### Error Handling Pattern
+```typescript
+try {
+  // API call
+} catch (error: any) {
+  const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
+  return {
+    content: [{
+      type: 'text',
+      text: JSON.stringify({
+        error: `Failed to ${action}: ${errorMessage}`,
+        details: error.response?.data
+      }, null, 2)
+    }],
+    isError: true
+  };
+}
+```
+
+## User Preferences
+
+### Documentation Style
+- Comprehensive examples for each tool
+- Clear parameter descriptions
+- Response format examples
+- Note differences between Cloud and Server
+
+### Code Style
+- TypeScript with strict typing
+- ES modules with .js extensions in imports
+- Consistent error handling
+- Modular architecture
+
+## Project-Specific Patterns
+
+### Authentication
+- Cloud: Username (not email) + App Password
+- Server: Email address + HTTP Access Token
+- Environment variables for configuration
+
+### Pagination Pattern
+- `limit` and `start` parameters
+- Return `has_more` and `next_start`
+- Include `total_count` when available
+
+### Response Formatting
+- Consistent JSON structure
+- Include operation status message
+- Provide detailed error information
+- Format dates as ISO strings
+
+## Known Challenges
+
+### Bitbucket API Differences
+- Parameter naming varies (e.g., pagelen vs limit)
+- Response structures differ significantly
+- Some features only available on one variant
+- Authentication methods completely different
+
+### Search Functionality
+- Only available on Bitbucket Server
+- Query syntax requires specific format
+- No Cloud API equivalent currently
+
+## Tool Usage Patterns
+
+### List Operations
+- Always include pagination parameters
+- Return consistent metadata
+- Support filtering where applicable
+
+### Modification Operations
+- Validate required parameters
+- Preserve existing data when updating
+- Return updated resource in response
+
+### File Operations
+- Smart truncation for large files
+- Type-based default limits
+- Support line range selection
+
+## Evolution of Decisions
+
+### Version 0.3.0
+- Modularized codebase into handlers
+- Separated types and utilities
+- Improved maintainability
+
+### Version 0.6.0
+- Enhanced PR details with comments/files
+- Added parallel API calls for performance
+
+### Version 0.9.0
+- Added code snippet matching for comments
+- Implemented confidence scoring
+
+### Version 1.0.0
+- Added code search functionality
+- Reached feature completeness
+- Ready for production use
+
+## Important Architecture Decisions
+
+### Handler Pattern
+Each tool category has its own handler class to maintain single responsibility and make the codebase more maintainable.
+
+### Type Guards
+All tool inputs are validated with type guards to ensure type safety at runtime.
+
+### Response Normalization
+Different API responses are normalized to consistent formats for easier consumption.
+
+### Error Handling
+Consistent error handling across all tools with detailed error messages and recovery suggestions.

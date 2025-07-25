@@ -40,3 +40,4 @@ test-api.js
 # Personal configuration
 RELOAD_INSTRUCTIONS.md
 personal-notes.md
+currentTask.yml

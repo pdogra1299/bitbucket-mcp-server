@@ -443,3 +443,78 @@ export interface FormattedCommit {
   parents: string[];
   is_merge_commit: boolean;
 }
+
+// Search types
+export interface BitbucketServerSearchRequest {
+  query: string;
+  entities: {
+    code?: {
+      start?: number;
+      limit?: number;
+    };
+    commits?: {
+      start?: number;
+      limit?: number;
+    };
+    pull_requests?: {
+      start?: number;
+      limit?: number;
+    };
+  };
+}
+
+export interface BitbucketServerSearchResult {
+  scope?: {
+    repository?: {
+      slug: string;
+      name: string;
+      project: {
+        key: string;
+        name: string;
+      };
+    };
+    type: string;
+  };
+  code?: {
+    category: string;
+    isLastPage: boolean;
+    count: number;
+    start: number;
+    nextStart?: number;
+    values: Array<{
+      file: string; // Just the file path as string
+      repository: {
+        slug: string;
+        name: string;
+        project: {
+          key: string;
+          name: string;
+        };
+      };
+      hitContexts: Array<Array<{
+        line: number;
+        text: string; // HTML-formatted with <em> tags
+      }>>;
+      pathMatches: Array<any>;
+      hitCount: number;
+    }>;
+  };
+  query?: {
+    substituted: boolean;
+  };
+}
+
+export interface FormattedSearchResult {
+  file_path: string;
+  file_name: string;
+  repository: string;
+  project: string;
+  matches: Array<{
+    line_number: number;
+    line_content: string;
+    highlighted_segments: Array<{
+      text: string;
+      is_match: boolean;
+    }>;
+  }>;
+}

@@ -1,0 +1,109 @@
+# Technical Context - Bitbucket MCP Server
+
+core_technologies:
+  language: "TypeScript"
+  version: "5.8.3"
+  module_system: "ES Modules"
+  runtime:
+    name: "Node.js"
+    version: ">= 16.0.0"
+    package_manager: "npm"
+
+libraries_and_bindings:
+  - name: "@modelcontextprotocol/sdk"
+    version: "^1.12.1"
+    purpose: "MCP protocol implementation"
+  
+  - name: "axios"
+    version: "^1.10.0"
+    purpose: "HTTP client for API requests"
+  
+  - name: "minimatch"
+    version: "^9.0.3"
+    purpose: "Glob pattern matching for file filtering"
+
+development_environment:
+  build_tools:
+    - "TypeScript compiler (tsc)"
+    - "npm scripts for build automation"
+  
+  commands:
+    build: "npm run build"
+    dev: "npm run dev"
+    start: "npm start"
+    publish: "npm publish"
+  
+  project_structure:
+    src_directory: "src/"
+    build_directory: "build/"
+    entry_point: "src/index.ts"
+    compiled_entry: "build/index.js"
+
+technical_patterns:
+  - name: "Shebang for CLI execution"
+    description: "#!/usr/bin/env node at top of index.ts"
+    usage: "Enables direct execution as CLI tool"
+  
+  - name: "ES Module imports"
+    description: "Using .js extensions in TypeScript imports"
+    usage: "Required for ES module compatibility"
+    examples:
+      - "import { Server } from '@modelcontextprotocol/sdk/server/index.js'"
+  
+  - name: "Type-safe error handling"
+    description: "Custom ApiError interface with typed errors"
+    usage: "Consistent error handling across API calls"
+  
+  - name: "Environment variable configuration"
+    description: "Process.env for authentication and base URL"
+    usage: "Flexible configuration without code changes"
+
+api_integration:
+  bitbucket_cloud:
+    base_url: "https://api.bitbucket.org/2.0"
+    auth_method: "Basic Auth with App Password"
+    api_style: "RESTful with JSON"
+    pagination: "page-based with pagelen parameter"
+  
+  bitbucket_server:
+    base_url: "Custom URL (e.g., https://bitbucket.company.com)"
+    auth_method: "Bearer token (HTTP Access Token)"
+    api_style: "RESTful with JSON"
+    pagination: "offset-based with start/limit"
+    api_version: "/rest/api/1.0"
+    search_api: "/rest/search/latest"
+
+deployment:
+  package_name: "@nexus2520/bitbucket-mcp-server"
+  registry: "npm public registry"
+  distribution:
+    - "Compiled JavaScript in build/"
+    - "Type definitions excluded"
+    - "Source maps excluded"
+  
+  execution_methods:
+    - "npx -y @nexus2520/bitbucket-mcp-server"
+    - "Direct node execution after install"
+    - "MCP client integration"
+
+security_considerations:
+  - "Credentials stored in environment variables"
+  - "No credential logging or exposure"
+  - "HTTPS only for API communications"
+  - "Token/password validation on startup"
+
+performance_optimizations:
+  - "Parallel API calls for PR details"
+  - "Smart file truncation to prevent token overflow"
+  - "Pagination for large result sets"
+  - "Early exit on authentication failure"
+
+compatibility:
+  mcp_clients:
+    - "Cline (VSCode extension)"
+    - "Other MCP-compatible AI assistants"
+  
+  bitbucket_versions:
+    - "Bitbucket Cloud (latest API)"
+    - "Bitbucket Server 7.x+"
+    - "Bitbucket Data Center"

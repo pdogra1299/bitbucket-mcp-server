@@ -1,0 +1,88 @@
+# Active Context - Bitbucket MCP Server
+
+current_focus_areas:
+  - name: "Search Code Feature Implementation"
+    status: "completed"
+    priority: "high"
+    team: "frontend"
+    timeline: "2025-07-25"
+
+recent_changes:
+  - date: "2025-07-25"
+    feature: "code_search_response_fix"
+    description: "Fixed search_code tool response handling to match actual Bitbucket API structure"
+    status: "completed"
+    files_affected:
+      - "src/utils/formatters.ts"
+      - "src/handlers/search-handlers.ts"
+    technical_details: "Added formatCodeSearchOutput for simplified AI-friendly output showing only filename, line number, and text"
+    business_impact: "Search results now properly formatted for AI consumption with cleaner output"
+    patterns_introduced:
+      - "Simplified formatter pattern for AI-friendly output"
+      
+  - date: "2025-07-25"
+    feature: "code_search"
+    description: "Added search_code tool for searching code across repositories"
+    status: "completed"
+    files_affected:
+      - "src/handlers/search-handlers.ts"
+      - "src/types/bitbucket.ts"
+      - "src/utils/formatters.ts"
+      - "src/types/guards.ts"
+      - "src/tools/definitions.ts"
+      - "src/index.ts"
+    technical_details: "Implemented Bitbucket Server search API integration"
+    business_impact: "Enables code search functionality for Bitbucket Server users"
+    patterns_introduced:
+      - "SearchHandlers following modular architecture"
+      - "Search result formatting pattern"
+
+patterns_discovered:
+  - name: "Modular Handler Architecture"
+    description: "Each tool category has its own handler class"
+    usage: "Add new handlers for new tool categories"
+    implementation: "Create handler class, add to index.ts, register tools"
+
+  - name: "API Variant Handling"
+    description: "Single handler supports both Cloud and Server APIs"
+    usage: "Check isServer flag and adjust API paths/parameters"
+    implementation: "Use apiClient.getIsServer() to determine variant"
+    
+  - name: "Simplified AI Formatter Pattern"
+    description: "Separate formatters for detailed vs AI-friendly output"
+    usage: "Create simplified formatters that extract only essential information for AI"
+    implementation: "formatCodeSearchOutput strips HTML, shows only file:line:text format"
+
+recent_learnings:
+  - date: "2025-07-25"
+    topic: "Bitbucket Search API Response Structure"
+    description: "API returns file as string (not object), uses hitContexts with HTML formatting"
+    impact: "Need to parse HTML <em> tags and handle different response structure"
+    
+  - date: "2025-07-25"
+    topic: "Bitbucket Search API"
+    description: "Search API only available on Bitbucket Server, not Cloud"
+    impact: "Search tool marked as Server-only with future Cloud support planned"
+
+  - date: "2025-07-25"
+    topic: "Version Management"
+    description: "Major version 1.0.0 indicates stable API with comprehensive features"
+    impact: "Project ready for production use"
+
+key_decisions:
+  - decision: "Separate handler for search tools"
+    rationale: "Maintains single responsibility and modularity"
+    date: "2025-07-25"
+    
+  - decision: "YAML format for Memory Bank"
+    rationale: "Better merge conflict handling and structured data"
+    date: "2025-07-25"
+
+current_challenges:
+  - "Bitbucket Cloud search API not yet available"
+  - "Need to handle different search syntaxes across platforms"
+
+next_priorities:
+  - "Add Bitbucket Cloud search when API becomes available"
+  - "Enhance search with more filtering options"
+  - "Add support for searching in other entities (commits, PRs)"
