@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **New `create_branch` tool for creating branches**:
+  - Create a new branch from an existing branch or commit
+  - Supports both branch names and commit hashes as start points
+  - Works with both Bitbucket Server and Cloud APIs
+  - Returns created branch details including name, ID, and latest commit
+  - Automatically resolves branch names to commit hashes for Server API
+  - Validates start point existence for Cloud API
+  - Requires write access to the repository
+
 ## [1.0.0] - 2025-07-25
 
 ### Added

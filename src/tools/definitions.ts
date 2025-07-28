@@ -306,6 +306,32 @@ export const toolDefinitions = [
     },
   },
   {
+    name: 'create_branch',
+    description: 'Create a new branch from an existing branch or commit',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        branch_name: {
+          type: 'string',
+          description: 'Name of the new branch to create',
+        },
+        start_point: {
+          type: 'string',
+          description: 'Branch name or commit hash to create the new branch from (e.g., "main", "develop", or a commit hash)',
+        },
+      },
+      required: ['workspace', 'repository', 'branch_name', 'start_point'],
+    },
+  },
+  {
     name: 'get_pull_request_diff',
     description: 'Get the diff/changes for a pull request with optional filtering',
     inputSchema: {

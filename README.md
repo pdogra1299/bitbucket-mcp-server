@@ -17,10 +17,10 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 - `add_comment` - Add comments to pull requests (supports replies)
 - `merge_pull_request` - Merge pull requests with various strategies
 - `list_pr_commits` - List all commits that are part of a pull request
-- `delete_branch` - Delete branches after merge
 
 #### Branch Management Tools
 - `list_branches` - List branches with filtering and pagination
+- `create_branch` - Create a new branch from an existing branch or commit
 - `delete_branch` - Delete branches (with protection checks)
 - `get_branch` - Get detailed branch information including associated PRs
 - `list_branch_commits` - List commits in a branch with advanced filtering
@@ -630,6 +630,31 @@ Returns a paginated list of branches with:
 - Latest commit hash
 - Default branch indicator
 - Pagination info
+
+### Create Branch
+
+```typescript
+{
+  "tool": "create_branch",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "branch_name": "feature/new-feature",
+    "start_point": "main"  // Branch name or commit hash to create from
+  }
+}
+```
+
+Creates a new branch from an existing branch or commit. The `start_point` can be:
+- A branch name (e.g., "main", "develop")
+- A commit hash (full or partial)
+
+Returns:
+- Created branch details (name, ID, latest commit)
+- Success message
+- Repository information
+
+**Note**: Requires write access to the repository.
 
 ### Delete Branch
 
