@@ -3,11 +3,12 @@ import { BitbucketApiClient } from '../utils/api-client.js';
 import {
   isListBranchesArgs,
   isDeleteBranchArgs,
+  isCreateBranchArgs,
   isGetBranchArgs,
   isListBranchCommitsArgs
 } from '../types/guards.js';
-import { 
-  BitbucketServerBranch, 
+import {
+  BitbucketServerBranch,
   BitbucketCloudBranch,
   BitbucketServerCommit,
   BitbucketCloudCommit,
@@ -133,16 +134,16 @@ export class BranchHandlers {
             limit: 100
           }
         });
-        
+
         // Find the exact branch
         const branch = branchesResponse.values?.find((b: any) => b.displayId === branch_name);
         if (!branch) {
           throw new Error(`Branch '${branch_name}' not found`);
         }
-        
+
         // Now delete using branch-utils endpoint with correct format
         apiPath = `/rest/branch-utils/latest/projects/${workspace}/repos/${repository}/branches`;
-        
+
         try {
           await this.apiClient.makeRequest<any>('delete', apiPath, {
             name: branch_name,
@@ -150,7 +151,7 @@ export class BranchHandlers {
           });
         } catch (deleteError: any) {
           // If the error is about empty response but status is 204 (No Content), it's successful
-          if (deleteError.originalError?.response?.status === 204 || 
+          if (deleteError.originalError?.response?.status === 204 ||
               deleteError.message?.includes('No content to map')) {
             // Branch was deleted successfully
           } else {
@@ -164,7 +165,7 @@ export class BranchHandlers {
           await this.apiClient.makeRequest<any>('delete', apiPath);
         } catch (deleteError: any) {
           // If the error is about empty response but status is 204 (No Content), it's successful
-          if (deleteError.originalError?.response?.status === 204 || 
+          if (deleteError.originalError?.response?.status === 204 ||
               deleteError.message?.includes('No content to map')) {
             // Branch was deleted successfully
           } else {
@@ -215,7 +216,7 @@ export class BranchHandlers {
             details: true
           }
         });
-        
+
         // Find the exact branch
         const branch = branchesResponse.values?.find((b: BitbucketServerBranch) => b.displayId === branch_name);
         if (!branch) {
@@ -229,7 +230,7 @@ export class BranchHandlers {
             id: branch.latestCommit,
             message: branch.metadata?.['com.atlassian.bitbucket.server.bitbucket-branch:latest-commit-metadata']?.message || null,
             author: branch.metadata?.['com.atlassian.bitbucket.server.bitbucket-branch:latest-commit-metadata']?.author || null,
-            date: branch.metadata?.['com.atlassian.bitbucket.server.bitbucket-branch:latest-commit-metadata']?.authorTimestamp 
+            date: branch.metadata?.['com.atlassian.bitbucket.server.bitbucket-branch:latest-commit-metadata']?.authorTimestamp
               ? new Date(branch.metadata['com.atlassian.bitbucket.server.bitbucket-branch:latest-commit-metadata'].authorTimestamp).toISOString()
               : null
           },
@@ -264,7 +265,7 @@ export class BranchHandlers {
 
       // Step 2: Get open PRs from this branch
       let openPRs: any[] = [];
-      
+
       if (this.apiClient.getIsServer()) {
         // Bitbucket Server
         const prPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests`;
@@ -321,7 +322,7 @@ export class BranchHandlers {
 
       // Step 3: Optionally get merged PRs
       let mergedPRs: any[] = [];
-      
+
       if (include_merged_prs) {
         if (this.apiClient.getIsServer()) {
           // Bitbucket Server
@@ -362,7 +363,7 @@ export class BranchHandlers {
       }
 
       // Step 4: Calculate statistics
-      const daysSinceLastCommit = branchInfo.latest_commit.date 
+      const daysSinceLastCommit = branchInfo.latest_commit.date
         ? Math.floor((Date.now() - new Date(branchInfo.latest_commit.date).getTime()) / (1000 * 60 * 60 * 24))
         : null;
 
@@ -409,11 +410,11 @@ export class BranchHandlers {
       );
     }
 
-    const { 
-      workspace, 
-      repository, 
-      branch_name, 
-      limit = 25, 
+    const {
+      workspace,
+      repository,
+      branch_name,
+      limit = 25,
       start = 0,
       since,
       until,
@@ -451,18 +452,18 @@ export class BranchHandlers {
 
         // Format commits
         commits = (response.values || []).map((commit: BitbucketServerCommit) => formatServerCommit(commit));
-        
+
         // Apply client-side filters for Server API
         if (author) {
           // Filter by author email or name
-          commits = commits.filter(c => 
-            c.author.email === author || 
+          commits = commits.filter(c =>
+            c.author.email === author ||
             c.author.name === author ||
             c.author.email.toLowerCase() === author.toLowerCase() ||
             c.author.name.toLowerCase() === author.toLowerCase()
           );
         }
-        
+
         // Filter by date if 'until' is provided (Server API doesn't support 'until' param directly)
         if (until) {
           const untilDate = new Date(until).getTime();
@@ -582,6 +583,116 @@ export class BranchHandlers {
       };
     } catch (error) {
       return this.apiClient.handleApiError(error, `listing commits for branch '${branch_name}' in ${workspace}/${repository}`);
+    }
+  }
+
+  async handleCreateBranch(args: any) {
+    if (!isCreateBranchArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for create_branch'
+      );
+    }
+
+    const { workspace, repository, branch_name, start_point } = args;
+
+    try {
+      let apiPath: string;
+      let requestBody: any;
+
+      if (this.apiClient.getIsServer()) {
+        // Bitbucket Server API - using rest/api/latest/projects/{projectKey}/repos/{repositorySlug}/branches
+        apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/branches`;
+
+        // First, resolve the start_point to a commit hash if it's a branch name
+        let startCommitHash = start_point;
+
+        // Check if start_point is a branch name by trying to get branch info
+        if (!start_point.match(/^[a-f0-9]{40}$/i)) { // Not a full commit hash
+          try {
+            const branchesPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/branches`;
+            const branchesResponse = await this.apiClient.makeRequest<any>('get', branchesPath, undefined, {
+              params: {
+                filterText: start_point,
+                limit: 100
+              }
+            });
+
+            const sourceBranch = branchesResponse.values?.find((b: any) => b.displayId === start_point);
+            if (sourceBranch && sourceBranch.latestCommit) {
+              startCommitHash = sourceBranch.latestCommit;
+            }
+          } catch (error) {
+            // If we can't find the branch, assume start_point is a commit hash or partial hash
+          }
+        }
+
+        requestBody = {
+          name: branch_name,
+          startPoint: startCommitHash,
+          message: `Create branch ${branch_name} from ${start_point}`
+        };
+      } else {
+        // Bitbucket Cloud API - using /repositories/{workspace}/{repo_slug}/refs/branches
+        apiPath = `/repositories/${workspace}/${repository}/refs/branches`;
+
+        // For Cloud API, we need to resolve the start_point to a target object
+        let target: any;
+
+        // Check if start_point is a commit hash or branch name
+        if (start_point.match(/^[a-f0-9]{7,40}$/i)) {
+          // It's a commit hash
+          target = { hash: start_point };
+        } else {
+          // It's likely a branch name, get the target from the branch
+          try {
+            const branchPath = `/repositories/${workspace}/${repository}/refs/branches/${encodeURIComponent(start_point)}`;
+            const branch = await this.apiClient.makeRequest<any>('get', branchPath);
+            target = branch.target;
+          } catch (error) {
+            throw new Error(`Could not find branch or commit '${start_point}' to create branch from`);
+          }
+        }
+
+        requestBody = {
+          name: branch_name,
+          target: target
+        };
+      }
+
+      const response = await this.apiClient.makeRequest<any>('post', apiPath, requestBody);
+
+      // Format the response based on the API
+      let createdBranch: any;
+      if (this.apiClient.getIsServer()) {
+        createdBranch = {
+          name: response.displayId,
+          id: response.id,
+          latest_commit: response.latestCommit,
+          is_default: false
+        };
+      } else {
+        createdBranch = {
+          name: response.name,
+          target: response.target?.hash,
+          is_default: false
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              message: `Branch '${branch_name}' created successfully from '${start_point}'`,
+              branch: createdBranch,
+              repository: `${workspace}/${repository}`
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      return this.apiClient.handleApiError(error, `creating branch '${branch_name}' from '${start_point}' in ${workspace}/${repository}`);
     }
   }
 }

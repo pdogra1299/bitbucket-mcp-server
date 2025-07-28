@@ -108,6 +108,8 @@ class BitbucketMCPServer {
         // Branch tools
         case 'list_branches':
           return this.branchHandlers.handleListBranches(request.params.arguments);
+        case 'create_branch':
+          return this.branchHandlers.handleCreateBranch(request.params.arguments);
         case 'delete_branch':
           return this.branchHandlers.handleDeleteBranch(request.params.arguments);
         case 'get_branch':
