@@ -1,10 +1,10 @@
 # Progress - Bitbucket MCP Server
 
 project_status:
-  overall_progress: "90%"
-  phase: "Feature Complete"
-  version: "1.0.0"
-  release_status: "Ready for production"
+  overall_progress: "95%"
+  phase: "Post-1.0 Improvements"
+  version: "1.0.1"
+  release_status: "Production with improvements"
 
 milestones_completed:
   - name: "Core PR Tools"

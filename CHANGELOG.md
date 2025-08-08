@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2025-08-08
+
+### Fixed
+- **Improved search_code tool response formatting**:
+  - Added simplified `formatCodeSearchOutput` for cleaner AI consumption
+  - Enhanced HTML entity decoding (handles &quot;, &lt;, &gt;, &amp;, &#x2F;, &#x27;)
+  - Improved response structure showing file paths and line numbers clearly
+  - Removed HTML formatting tags for better readability
+
+### Changed
+- Search results now use simplified formatter by default for better AI tool integration
+- Enhanced query display to show actual search patterns used
+
 ## [1.0.0] - 2025-07-25
 
 ### Added

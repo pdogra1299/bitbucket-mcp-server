@@ -118,6 +118,12 @@ try {
 - Reached feature completeness
 - Ready for production use
 
+### Version 1.0.1
+- Improved search response formatting for AI consumption
+- Added simplified formatCodeSearchOutput
+- Enhanced HTML entity decoding and tag stripping
+- Established live MCP testing workflow
+
 ## Important Architecture Decisions
 
 ### Handler Pattern

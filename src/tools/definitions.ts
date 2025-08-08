@@ -609,7 +609,7 @@ export const toolDefinitions = [
   },
   {
     name: 'search_code',
-    description: 'Search for code across Bitbucket repositories (currently only supported for Bitbucket Server)',
+    description: 'Search for code across Bitbucket repositories with enhanced context-aware search patterns (currently only supported for Bitbucket Server)',
     inputSchema: {
       type: 'object',
       properties: {
@@ -623,11 +623,21 @@ export const toolDefinitions = [
         },
         search_query: {
           type: 'string',
-          description: 'The search term or phrase to look for in code',
+          description: 'The search term or phrase to look for in code (e.g., "variable")',
+        },
+        search_context: {
+          type: 'string',
+          enum: ['assignment', 'declaration', 'usage', 'exact', 'any'],
+          description: 'Context to search for: assignment (term=value), declaration (defining term), usage (calling/accessing term), exact (quoted match), or any (all patterns)',
         },
         file_pattern: {
           type: 'string',
           description: 'File path pattern to filter results (e.g., "*.java", "src/**/*.ts") (optional)',
+        },
+        include_patterns: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Additional custom search patterns to include (e.g., ["variable =", ".variable"]) (optional)',
         },
         limit: {
           type: 'number',
