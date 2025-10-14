@@ -39,6 +39,10 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 #### Search Tools
 - `search_code` - Search for code across repositories (currently Bitbucket Server only)
 
+#### Project and Repository Discovery Tools
+- `list_projects` - List all accessible Bitbucket projects/workspaces with filtering
+- `list_repositories` - List repositories in a project or across all accessible projects
+
 ## Installation
 
 ### Using npx (Recommended)
@@ -764,6 +768,18 @@ Get all commits in a specific branch with advanced filtering options:
     "start": 0  // For pagination
   }
 }
+
+// Include CI/CD build status (Bitbucket Server only)
+{
+  "tool": "list_branch_commits",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "branch_name": "main",
+    "include_build_status": true,  // Fetch build status for each commit
+    "limit": 50
+  }
+}
 ```
 
 **Filter Parameters:**
@@ -772,6 +788,7 @@ Get all commits in a specific branch with advanced filtering options:
 - `author`: Filter by author email/username
 - `include_merge_commits`: Boolean to include/exclude merge commits (default: true)
 - `search`: Search for text in commit messages
+- `include_build_status`: Boolean to include CI/CD build status (default: false, Bitbucket Server only)
 
 Returns detailed commit information:
 ```json
@@ -789,7 +806,13 @@ Returns detailed commit information:
       },
       "date": "2025-01-03T10:30:00Z",
       "parents": ["parent1hash", "parent2hash"],
-      "is_merge_commit": false
+      "is_merge_commit": false,
+      "build_status": {  // Only present when include_build_status is true
+        "successful": 5,
+        "failed": 0,
+        "in_progress": 1,
+        "unknown": 0
+      }
     }
     // ... more commits
   ],
@@ -801,7 +824,8 @@ Returns detailed commit information:
   "filters_applied": {
     "author": "john.doe@example.com",
     "since": "2025-01-01",
-    "include_merge_commits": false
+    "include_merge_commits": false,
+    "include_build_status": true
   }
 }
 ```
@@ -812,6 +836,7 @@ This tool is particularly useful for:
 - Tracking changes within date ranges
 - Searching for specific features or fixes
 - Analyzing branch activity patterns
+- Monitoring CI/CD build status for commits (Bitbucket Server only)
 
 ### List PR Commits
 
@@ -1072,6 +1097,180 @@ Example responses:
   }
 }
 ```
+
+### List Projects
+
+List all accessible Bitbucket projects (Server) or workspaces (Cloud):
+
+```typescript
+// List all accessible projects
+{
+  "tool": "list_projects",
+  "arguments": {
+    "limit": 25,  // Optional (default: 25)
+    "start": 0    // Optional: for pagination (default: 0)
+  }
+}
+
+// Filter by project name
+{
+  "tool": "list_projects",
+  "arguments": {
+    "name": "backend",  // Partial name match
+    "limit": 50
+  }
+}
+
+// Filter by permission level (Bitbucket Server only)
+{
+  "tool": "list_projects",
+  "arguments": {
+    "permission": "PROJECT_WRITE",  // PROJECT_READ, PROJECT_WRITE, PROJECT_ADMIN
+    "limit": 100
+  }
+}
+```
+
+**Parameters:**
+- `name`: Filter by project/workspace name (partial match, optional)
+- `permission`: Filter by permission level (Bitbucket Server only, optional)
+  - `PROJECT_READ`: Read access
+  - `PROJECT_WRITE`: Write access
+  - `PROJECT_ADMIN`: Admin access
+- `limit`: Maximum number of projects to return (default: 25)
+- `start`: Start index for pagination (default: 0)
+
+Returns project/workspace information:
+```json
+{
+  "projects": [
+    {
+      "key": "PROJ",
+      "id": 1234,
+      "name": "My Project",
+      "description": "Project description",
+      "is_public": false,
+      "type": "NORMAL",  // NORMAL or PERSONAL (Server), WORKSPACE (Cloud)
+      "url": "https://bitbucket.yourcompany.com/projects/PROJ"
+    }
+    // ... more projects
+  ],
+  "total_count": 15,
+  "start": 0,
+  "limit": 25,
+  "has_more": false,
+  "next_start": null
+}
+```
+
+**Note**:
+- For Bitbucket Cloud, this returns workspaces (not projects in the traditional sense)
+- For Bitbucket Server, this returns both personal and team projects
+
+This tool is particularly useful for:
+- Discovering available projects/workspaces for your account
+- Finding project keys needed for other API calls
+- Identifying projects you have specific permissions on
+- Browsing organizational structure
+
+### List Repositories
+
+List repositories within a specific project/workspace or across all accessible repositories:
+
+```typescript
+// List all repositories in a workspace/project
+{
+  "tool": "list_repositories",
+  "arguments": {
+    "workspace": "PROJ",  // Required for Bitbucket Cloud, optional for Server
+    "limit": 25,          // Optional (default: 25)
+    "start": 0            // Optional: for pagination (default: 0)
+  }
+}
+
+// List all accessible repositories (Bitbucket Server only)
+{
+  "tool": "list_repositories",
+  "arguments": {
+    "limit": 100
+  }
+}
+
+// Filter by repository name
+{
+  "tool": "list_repositories",
+  "arguments": {
+    "workspace": "PROJ",
+    "name": "frontend",  // Partial name match
+    "limit": 50
+  }
+}
+
+// Filter by permission level (Bitbucket Server only)
+{
+  "tool": "list_repositories",
+  "arguments": {
+    "workspace": "PROJ",
+    "permission": "REPO_WRITE",  // REPO_READ, REPO_WRITE, REPO_ADMIN
+    "limit": 100
+  }
+}
+```
+
+**Parameters:**
+- `workspace`: Project key (Server) or workspace slug (Cloud)
+  - **Required for Bitbucket Cloud**
+  - Optional for Bitbucket Server (omit to list all accessible repos)
+- `name`: Filter by repository name (partial match, optional)
+- `permission`: Filter by permission level (Bitbucket Server only, optional)
+  - `REPO_READ`: Read access
+  - `REPO_WRITE`: Write access
+  - `REPO_ADMIN`: Admin access
+- `limit`: Maximum number of repositories to return (default: 25)
+- `start`: Start index for pagination (default: 0)
+
+Returns repository information:
+```json
+{
+  "repositories": [
+    {
+      "slug": "my-repo",
+      "id": 5678,
+      "name": "My Repository",
+      "description": "Repository description",
+      "project_key": "PROJ",
+      "project_name": "My Project",
+      "state": "AVAILABLE",  // AVAILABLE, INITIALISING, INITIALISATION_FAILED (Server)
+      "is_public": false,
+      "is_forkable": true,
+      "clone_urls": {
+        "http": "https://bitbucket.yourcompany.com/scm/PROJ/my-repo.git",
+        "ssh": "ssh://git@bitbucket.yourcompany.com:7999/PROJ/my-repo.git"
+      },
+      "url": "https://bitbucket.yourcompany.com/projects/PROJ/repos/my-repo"
+    }
+    // ... more repositories
+  ],
+  "total_count": 42,
+  "start": 0,
+  "limit": 25,
+  "has_more": true,
+  "next_start": 25,
+  "workspace": "PROJ"
+}
+```
+
+**Important Notes:**
+- **Bitbucket Cloud** requires the `workspace` parameter. If omitted, you'll receive an error message
+- **Bitbucket Server** allows listing all accessible repos by omitting the `workspace` parameter
+- Clone URLs are provided for both HTTP(S) and SSH protocols
+
+This tool is particularly useful for:
+- Discovering available repositories in a project/workspace
+- Finding repository slugs needed for other API calls
+- Identifying repositories you have specific permissions on
+- Getting clone URLs for repositories
+- Browsing repository structure within an organization
 
 ## Development
 
