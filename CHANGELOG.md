@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-10-14
+
+### Added
+- **CI/CD build status support in `list_branch_commits` tool**:
+  - Added `include_build_status` optional parameter to fetch build/CI status for commits
+  - Returns build status with counts: successful, failed, in_progress, and unknown builds
+  - Uses Bitbucket Server UI API endpoint for efficient batch fetching of build summaries
+  - Graceful degradation: failures in fetching build status don't break commit listing
+  - Currently only supports Bitbucket Server (Cloud has different build status APIs)
+  - Useful for tracking CI/CD pipeline status alongside commit history
+
+- **New `list_projects` tool for project/workspace discovery**:
+  - List all accessible Bitbucket projects (Server) or workspaces (Cloud)
+  - Optional filtering by project name and permission level
+  - Returns project metadata: key, ID, name, description, visibility, and type
+  - Pagination support with `limit` and `start` parameters
+  - Works with both Bitbucket Server and Cloud with unified response format
+
+- **New `list_repositories` tool for repository discovery**:
+  - List repositories within a specific project/workspace or across all accessible repos
+  - Optional filtering by repository name and permission level
+  - Returns comprehensive repository details:
+    - Basic info: slug, ID, name, description, state
+    - Project association: project key and name
+    - Clone URLs for both HTTP(S) and SSH
+    - Repository settings: visibility, forkable status
+  - Pagination support with `limit` and `start` parameters
+  - Bitbucket Cloud requires workspace parameter (documented in response)
+  - Bitbucket Server supports listing all accessible repos without workspace filter
+
+### Changed
+- Added `ProjectHandlers` class following the modular architecture pattern
+- Enhanced TypeScript interfaces with project and repository types:
+  - `BitbucketServerProject` and `BitbucketCloudProject`
+  - `BitbucketServerRepository` and `BitbucketCloudRepository`
+  - `BitbucketServerBuildSummary` and `BuildStatus`
+- Added custom params serializer for multiple `commitId` parameters in build status API
+- Enhanced `FormattedCommit` interface with optional `build_status` field
+- Updated API client with `getBuildSummaries` method for batch build status fetching
+
 ## [1.0.1] - 2025-08-08
 
 ### Fixed

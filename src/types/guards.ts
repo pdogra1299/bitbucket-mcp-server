@@ -275,6 +275,7 @@ export const isListBranchCommitsArgs = (
   author?: string;
   include_merge_commits?: boolean;
   search?: string;
+  include_build_status?: boolean;
 } =>
   typeof args === 'object' &&
   args !== null &&
@@ -287,7 +288,8 @@ export const isListBranchCommitsArgs = (
   (args.until === undefined || typeof args.until === 'string') &&
   (args.author === undefined || typeof args.author === 'string') &&
   (args.include_merge_commits === undefined || typeof args.include_merge_commits === 'boolean') &&
-  (args.search === undefined || typeof args.search === 'string');
+  (args.search === undefined || typeof args.search === 'string') &&
+  (args.include_build_status === undefined || typeof args.include_build_status === 'boolean');
 
 export const isListPrCommitsArgs = (
   args: any
@@ -322,5 +324,37 @@ export const isSearchCodeArgs = (
   typeof args.search_query === 'string' &&
   (args.repository === undefined || typeof args.repository === 'string') &&
   (args.file_pattern === undefined || typeof args.file_pattern === 'string') &&
+  (args.limit === undefined || typeof args.limit === 'number') &&
+  (args.start === undefined || typeof args.start === 'number');
+
+export const isListProjectsArgs = (
+  args: any
+): args is {
+  name?: string;
+  permission?: string;
+  limit?: number;
+  start?: number;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  (args.name === undefined || typeof args.name === 'string') &&
+  (args.permission === undefined || typeof args.permission === 'string') &&
+  (args.limit === undefined || typeof args.limit === 'number') &&
+  (args.start === undefined || typeof args.start === 'number');
+
+export const isListRepositoriesArgs = (
+  args: any
+): args is {
+  workspace?: string;
+  name?: string;
+  permission?: string;
+  limit?: number;
+  start?: number;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  (args.workspace === undefined || typeof args.workspace === 'string') &&
+  (args.name === undefined || typeof args.name === 'string') &&
+  (args.permission === undefined || typeof args.permission === 'string') &&
   (args.limit === undefined || typeof args.limit === 'number') &&
   (args.start === undefined || typeof args.start === 'number');

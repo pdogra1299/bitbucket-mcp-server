@@ -1,4 +1,5 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
+import { BitbucketServerBuildSummary } from '../types/bitbucket.js';
 
 export interface ApiError {
   status?: number;
@@ -134,5 +135,48 @@ export class BitbucketApiClient {
 
   getIsServer(): boolean {
     return this.isServer;
+  }
+
+  async getBuildSummaries(
+    workspace: string,
+    repository: string,
+    commitIds: string[]
+  ): Promise<BitbucketServerBuildSummary> {
+    if (!this.isServer) {
+      // Build summaries only available for Bitbucket Server
+      return {};
+    }
+
+    if (commitIds.length === 0) {
+      return {};
+    }
+
+    try {
+      // Build query string with multiple commitId parameters
+      const apiPath = `/rest/ui/latest/projects/${workspace}/repos/${repository}/build-summaries`;
+
+      // Create params with custom serializer for multiple commitId parameters
+      const response = await this.makeRequest<BitbucketServerBuildSummary>(
+        'get',
+        apiPath,
+        undefined,
+        {
+          params: { commitId: commitIds },
+          paramsSerializer: (params: any) => {
+            // Custom serializer to create multiple commitId= parameters
+            if (params.commitId && Array.isArray(params.commitId)) {
+              return params.commitId.map((id: string) => `commitId=${encodeURIComponent(id)}`).join('&');
+            }
+            return '';
+          }
+        }
+      );
+
+      return response;
+    } catch (error) {
+      // If build-summaries endpoint fails, return empty object (graceful degradation)
+      console.error('Failed to fetch build summaries:', error);
+      return {};
+    }
   }
 }

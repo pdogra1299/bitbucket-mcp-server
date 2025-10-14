@@ -14,6 +14,7 @@ import { BranchHandlers } from './handlers/branch-handlers.js';
 import { ReviewHandlers } from './handlers/review-handlers.js';
 import { FileHandlers } from './handlers/file-handlers.js';
 import { SearchHandlers } from './handlers/search-handlers.js';
+import { ProjectHandlers } from './handlers/project-handlers.js';
 import { toolDefinitions } from './tools/definitions.js';
 
 // Get environment variables
@@ -37,12 +38,13 @@ class BitbucketMCPServer {
   private reviewHandlers: ReviewHandlers;
   private fileHandlers: FileHandlers;
   private searchHandlers: SearchHandlers;
+  private projectHandlers: ProjectHandlers;
 
   constructor() {
     this.server = new Server(
       {
         name: 'bitbucket-mcp-server',
-        version: '1.0.1',
+        version: '1.1.0',
       },
       {
         capabilities: {
@@ -69,6 +71,7 @@ class BitbucketMCPServer {
     this.reviewHandlers = new ReviewHandlers(this.apiClient, BITBUCKET_USERNAME!);
     this.fileHandlers = new FileHandlers(this.apiClient, BITBUCKET_BASE_URL);
     this.searchHandlers = new SearchHandlers(this.apiClient, BITBUCKET_BASE_URL);
+    this.projectHandlers = new ProjectHandlers(this.apiClient, BITBUCKET_BASE_URL);
 
     this.setupToolHandlers();
 
@@ -136,7 +139,13 @@ class BitbucketMCPServer {
         // Search tools
         case 'search_code':
           return this.searchHandlers.handleSearchCode(request.params.arguments);
-        
+
+        // Project tools
+        case 'list_projects':
+          return this.projectHandlers.handleListProjects(request.params.arguments);
+        case 'list_repositories':
+          return this.projectHandlers.handleListRepositories(request.params.arguments);
+
         default:
           throw new McpError(
             ErrorCode.MethodNotFound,

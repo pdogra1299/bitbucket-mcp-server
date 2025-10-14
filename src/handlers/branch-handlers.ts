@@ -409,17 +409,18 @@ export class BranchHandlers {
       );
     }
 
-    const { 
-      workspace, 
-      repository, 
-      branch_name, 
-      limit = 25, 
+    const {
+      workspace,
+      repository,
+      branch_name,
+      limit = 25,
       start = 0,
       since,
       until,
       author,
       include_merge_commits = true,
-      search
+      search,
+      include_build_status = false
     } = args;
 
     try {
@@ -535,6 +536,41 @@ export class BranchHandlers {
         }
       }
 
+      // Fetch build status if requested (Server only)
+      if (include_build_status && this.apiClient.getIsServer() && commits.length > 0) {
+        try {
+          // Extract commit hashes (use full hash, not abbreviated)
+          const commitIds = commits.map(c => c.hash);
+
+          // Fetch build summaries for all commits
+          const buildSummaries = await this.apiClient.getBuildSummaries(
+            workspace,
+            repository,
+            commitIds
+          );
+
+          // Merge build status into commits
+          commits = commits.map(commit => {
+            const buildData = buildSummaries[commit.hash];
+            if (buildData) {
+              return {
+                ...commit,
+                build_status: {
+                  successful: buildData.successful || 0,
+                  failed: buildData.failed || 0,
+                  in_progress: buildData.inProgress || 0,
+                  unknown: buildData.unknown || 0
+                }
+              };
+            }
+            return commit;
+          });
+        } catch (error) {
+          // Gracefully degrade - log error but don't fail the entire request
+          console.error('Failed to fetch build status:', error);
+        }
+      }
+
       // Get branch head info
       let branchHead: string | null = null;
       try {
@@ -561,6 +597,7 @@ export class BranchHandlers {
       if (until) filtersApplied.until = until;
       if (include_merge_commits !== undefined) filtersApplied.include_merge_commits = include_merge_commits;
       if (search) filtersApplied.search = search;
+      if (include_build_status) filtersApplied.include_build_status = include_build_status;
 
       return {
         content: [

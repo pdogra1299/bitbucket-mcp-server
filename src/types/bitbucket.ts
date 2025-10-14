@@ -442,6 +442,7 @@ export interface FormattedCommit {
   date: string;
   parents: string[];
   is_merge_commit: boolean;
+  build_status?: BuildStatus;
 }
 
 // Search types
@@ -517,4 +518,109 @@ export interface FormattedSearchResult {
       is_match: boolean;
     }>;
   }>;
+}
+
+// Build status types for Bitbucket Server
+export interface BitbucketServerBuildSummary {
+  [commitId: string]: {
+    failed?: number;
+    inProgress?: number;
+    successful?: number;
+    unknown?: number;
+  };
+}
+
+export interface BuildStatus {
+  successful: number;
+  failed: number;
+  in_progress: number;
+  unknown: number;
+}
+
+// Project and Repository types
+export interface BitbucketServerProject {
+  key: string;
+  id: number;
+  name: string;
+  description?: string;
+  public: boolean;
+  type: 'NORMAL' | 'PERSONAL';
+  links: {
+    self: Array<{
+      href: string;
+    }>;
+  };
+}
+
+export interface BitbucketCloudProject {
+  key: string;
+  uuid: string;
+  name: string;
+  description?: string;
+  is_private: boolean;
+  links: {
+    html: {
+      href: string;
+    };
+  };
+}
+
+export interface BitbucketServerRepository {
+  slug: string;
+  id: number;
+  name: string;
+  description?: string;
+  hierarchyId: string;
+  scmId: string;
+  state: 'AVAILABLE' | 'INITIALISING' | 'INITIALISATION_FAILED';
+  statusMessage: string;
+  forkable: boolean;
+  project: {
+    key: string;
+    id: number;
+    name: string;
+    public: boolean;
+    type: string;
+  };
+  public: boolean;
+  links: {
+    clone: Array<{
+      href: string;
+      name: string;
+    }>;
+    self: Array<{
+      href: string;
+    }>;
+  };
+}
+
+export interface BitbucketCloudRepository {
+  slug: string;
+  uuid: string;
+  name: string;
+  full_name: string;
+  description?: string;
+  scm: string;
+  is_private: boolean;
+  owner: {
+    display_name: string;
+    uuid: string;
+  };
+  project: {
+    key: string;
+    name: string;
+  };
+  mainbranch?: {
+    name: string;
+    type: string;
+  };
+  links: {
+    html: {
+      href: string;
+    };
+    clone: Array<{
+      href: string;
+      name: string;
+    }>;
+  };
 }

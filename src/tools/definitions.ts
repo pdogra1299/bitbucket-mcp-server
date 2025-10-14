@@ -573,6 +573,10 @@ export const toolDefinitions = [
           type: 'string',
           description: 'Search for text in commit messages (optional)',
         },
+        include_build_status: {
+          type: 'boolean',
+          description: 'Include CI/CD build status for each commit (Bitbucket Server only, default: false)',
+        },
       },
       required: ['workspace', 'repository', 'branch_name'],
     },
@@ -649,6 +653,62 @@ export const toolDefinitions = [
         },
       },
       required: ['workspace', 'search_query'],
+    },
+  },
+  {
+    name: 'list_projects',
+    description: 'List all accessible Bitbucket projects with optional filtering',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: {
+          type: 'string',
+          description: 'Filter by project name (partial match, optional)',
+        },
+        permission: {
+          type: 'string',
+          description: 'Filter by permission level (e.g., PROJECT_READ, PROJECT_WRITE, PROJECT_ADMIN, optional)',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of projects to return (default: 25)',
+        },
+        start: {
+          type: 'number',
+          description: 'Start index for pagination (default: 0)',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'list_repositories',
+    description: 'List repositories in a project or across all accessible projects',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key to filter repositories (optional, if not provided lists all accessible repos)',
+        },
+        name: {
+          type: 'string',
+          description: 'Filter by repository name (partial match, optional)',
+        },
+        permission: {
+          type: 'string',
+          description: 'Filter by permission level (e.g., REPO_READ, REPO_WRITE, REPO_ADMIN, optional)',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of repositories to return (default: 25)',
+        },
+        start: {
+          type: 'number',
+          description: 'Start index for pagination (default: 0)',
+        },
+      },
+      required: [],
     },
   },
 ];
