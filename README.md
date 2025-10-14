@@ -843,6 +843,7 @@ This tool is particularly useful for:
 Get all commits that are part of a pull request:
 
 ```typescript
+// Basic usage
 {
   "tool": "list_pr_commits",
   "arguments": {
@@ -851,6 +852,18 @@ Get all commits that are part of a pull request:
     "pull_request_id": 123,
     "limit": 50,  // Optional (default: 25)
     "start": 0    // Optional: for pagination
+  }
+}
+
+// Include CI/CD build status (Bitbucket Server only)
+{
+  "tool": "list_pr_commits",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "include_build_status": true,  // Fetch build status for each commit
+    "limit": 50
   }
 }
 ```
@@ -871,7 +884,13 @@ Returns commit information for the PR:
       },
       "date": "2025-01-02T14:20:00Z",
       "parents": ["parent1hash"],
-      "is_merge_commit": false
+      "is_merge_commit": false,
+      "build_status": {  // Only present when include_build_status is true
+        "successful": 3,
+        "failed": 0,
+        "in_progress": 0,
+        "unknown": 0
+      }
     }
     // ... more commits
   ],
@@ -888,6 +907,7 @@ This tool is particularly useful for:
 - Checking commit messages for quality
 - Verifying authorship of changes
 - Analyzing PR complexity by commit count
+- Monitoring CI/CD build status for all PR commits (Bitbucket Server only)
 
 ### Get Pull Request Diff
 

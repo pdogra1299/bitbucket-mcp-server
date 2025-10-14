@@ -5,7 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.1] - 2025-10-14
+## [1.1.2] - 2025-10-14
+
+### Added
+- **CI/CD build status support in `list_pr_commits` tool**:
+  - Added `include_build_status` optional parameter to fetch build/CI status for pull request commits
+  - Returns build status with counts: successful, failed, in_progress, and unknown builds
+  - Uses same Bitbucket Server UI API endpoint as `list_branch_commits` for consistency
+  - Graceful degradation: failures in fetching build status don't break commit listing
+  - Currently only supports Bitbucket Server (Cloud has different build status APIs)
+  - Useful for tracking CI/CD pipeline status for all commits in a pull request
 
 ### Changed
 - Enhanced README.md with comprehensive documentation for new v1.1.0 features:

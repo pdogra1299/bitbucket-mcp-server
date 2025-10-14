@@ -1126,7 +1126,7 @@ export class PullRequestHandlers {
       );
     }
 
-    const { workspace, repository, pull_request_id, limit = 25, start = 0 } = args;
+    const { workspace, repository, pull_request_id, limit = 25, start = 0, include_build_status = false } = args;
 
     try {
       // First get the PR details to include in response
@@ -1182,6 +1182,38 @@ export class PullRequestHandlers {
         totalCount = response.size || commits.length;
         if (response.next) {
           nextPageStart = start + limit;
+        }
+      }
+
+      // Fetch build status if requested (Server only)
+      if (include_build_status && this.apiClient.getIsServer() && commits.length > 0) {
+        try {
+          const commitIds = commits.map(c => c.hash);
+          const buildSummaries = await this.apiClient.getBuildSummaries(
+            workspace,
+            repository,
+            commitIds
+          );
+
+          // Enhance commits with build status
+          commits = commits.map(commit => {
+            const buildData = buildSummaries[commit.hash];
+            if (buildData) {
+              return {
+                ...commit,
+                build_status: {
+                  successful: buildData.successful || 0,
+                  failed: buildData.failed || 0,
+                  in_progress: buildData.inProgress || 0,
+                  unknown: buildData.unknown || 0
+                }
+              };
+            }
+            return commit;
+          });
+        } catch (error) {
+          console.error('Failed to fetch build status for PR commits:', error);
+          // Graceful degradation - continue without build status
         }
       }
 

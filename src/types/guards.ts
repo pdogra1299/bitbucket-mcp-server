@@ -299,6 +299,7 @@ export const isListPrCommitsArgs = (
   pull_request_id: number;
   limit?: number;
   start?: number;
+  include_build_status?: boolean;
 } =>
   typeof args === 'object' &&
   args !== null &&
@@ -306,7 +307,8 @@ export const isListPrCommitsArgs = (
   typeof args.repository === 'string' &&
   typeof args.pull_request_id === 'number' &&
   (args.limit === undefined || typeof args.limit === 'number') &&
-  (args.start === undefined || typeof args.start === 'number');
+  (args.start === undefined || typeof args.start === 'number') &&
+  (args.include_build_status === undefined || typeof args.include_build_status === 'boolean');
 
 export const isSearchCodeArgs = (
   args: any

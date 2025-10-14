@@ -607,6 +607,10 @@ export const toolDefinitions = [
           type: 'number',
           description: 'Start index for pagination (default: 0)',
         },
+        include_build_status: {
+          type: 'boolean',
+          description: 'Include CI/CD build status for each commit (Bitbucket Server only, default: false)',
+        },
       },
       required: ['workspace', 'repository', 'pull_request_id'],
     },
