@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./build/index.js",
   "bin": {
-    "bitbucket-mcp-server": "./build/index.js"
+    "bitbucket-mcp-server": "build/index.js"
   },
   "files": [
     "build/**/*",
@@ -33,12 +33,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://git.pratiknarola.com/Pdogra/bitbucket-mcp-server"
+    "url": "git+https://github.com/pdogra1299/bitbucket-mcp-server.git"
   },
   "bugs": {
-    "url": "https://git.pratiknarola.com/Pdogra/bitbucket-mcp-server/issues"
+    "url": "https://github.com/pdogra1299/bitbucket-mcp-server/issues"
   },
-  "homepage": "https://git.pratiknarola.com/Pdogra/bitbucket-mcp-server#readme",
+  "homepage": "https://github.com/pdogra1299/bitbucket-mcp-server#readme",
   "engines": {
     "node": ">=16.0.0"
   },
