@@ -17,6 +17,7 @@ export const isListPullRequestsArgs = (
   author?: string;
   limit?: number;
   start?: number;
+  exclude_drafts?: boolean;
 } =>
   typeof args === 'object' &&
   args !== null &&
@@ -25,7 +26,8 @@ export const isListPullRequestsArgs = (
   (args.state === undefined || typeof args.state === 'string') &&
   (args.author === undefined || typeof args.author === 'string') &&
   (args.limit === undefined || typeof args.limit === 'number') &&
-  (args.start === undefined || typeof args.start === 'number');
+  (args.start === undefined || typeof args.start === 'number') &&
+  (args.exclude_drafts === undefined || typeof args.exclude_drafts === 'boolean');
 
 export const isCreatePullRequestArgs = (
   args: any

@@ -176,7 +176,7 @@ export class PullRequestHandlers {
       );
     }
 
-    const { workspace, repository, state = 'OPEN', author, limit = 25, start = 0 } = args;
+    const { workspace, repository, state = 'OPEN', author, limit = 25, start = 0, exclude_drafts = false } = args;
 
     try {
       let apiPath: string;
@@ -213,8 +213,17 @@ export class PullRequestHandlers {
       let totalCount = 0;
       let nextPageStart = null;
 
+      // Client-side draft filtering (API doesn't support native draft filtering)
+      // Note: This means the returned count may be less than 'limit' when drafts are filtered
+      // The total_count reflects the API's count (includes drafts)
+      // Pagination (next_start) is based on API pagination, not filtered results
+      const rawPRs = response.values || [];
+      const filteredPRs = exclude_drafts 
+        ? rawPRs.filter((pr: any) => pr.draft !== true)
+        : rawPRs;
+
       if (this.apiClient.getIsServer()) {
-        pullRequests = (response.values || []).map((pr: BitbucketServerPullRequest) => 
+        pullRequests = filteredPRs.map((pr: BitbucketServerPullRequest) => 
           formatServerResponse(pr, undefined, this.baseUrl)
         );
         totalCount = response.size || 0;
@@ -222,7 +231,7 @@ export class PullRequestHandlers {
           nextPageStart = response.nextPageStart;
         }
       } else {
-        pullRequests = (response.values || []).map((pr: BitbucketCloudPullRequest) => 
+        pullRequests = filteredPRs.map((pr: BitbucketCloudPullRequest) => 
           formatCloudResponse(pr)
         );
         totalCount = response.size || 0;

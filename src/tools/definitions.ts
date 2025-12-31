@@ -52,6 +52,10 @@ export const toolDefinitions = [
           type: 'number',
           description: 'Start index for pagination (default: 0)',
         },
+        exclude_drafts: {
+          type: 'boolean',
+          description: 'Exclude draft/WIP pull requests from results (default: false)',
+        },
       },
       required: ['workspace', 'repository'],
     },
