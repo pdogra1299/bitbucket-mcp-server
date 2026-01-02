@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./build/index.js",
   "bin": {
-    "bitbucket-mcp-server": "src/index.ts"
+    "bitbucket-mcp-server": "build/index.ts"
   },
   "files": [
     "build/**/*",
