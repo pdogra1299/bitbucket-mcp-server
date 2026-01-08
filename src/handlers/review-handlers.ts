@@ -141,8 +141,8 @@ export class ReviewHandlers {
 
       if (this.apiClient.getIsServer()) {
         // Bitbucket Server API - use participants endpoint
-        // Convert email format: @ to _ for the API
-        const username = this.username.replace('@', '_');
+        // Convert email format: @ and + to _ for the API slug format
+        const username = this.username.replace(/[@+]/g, '_');
         apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/participants/${username}`;
         await this.apiClient.makeRequest<any>('put', apiPath, { status: 'APPROVED' });
       } else {
@@ -183,7 +183,7 @@ export class ReviewHandlers {
 
       if (this.apiClient.getIsServer()) {
         // Bitbucket Server API - use participants endpoint
-        const username = this.username.replace('@', '_');
+        const username = this.username.replace(/[@+]/g, '_');
         apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/participants/${username}`;
         await this.apiClient.makeRequest<any>('put', apiPath, { status: 'UNAPPROVED' });
       } else {
@@ -222,7 +222,7 @@ export class ReviewHandlers {
     try {
       if (this.apiClient.getIsServer()) {
         // Bitbucket Server API - use needs-work status
-        const username = this.username.replace('@', '_');
+        const username = this.username.replace(/[@+]/g, '_');
         const apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/participants/${username}`;
         await this.apiClient.makeRequest<any>('put', apiPath, { status: 'NEEDS_WORK' });
         
@@ -276,7 +276,7 @@ export class ReviewHandlers {
     try {
       if (this.apiClient.getIsServer()) {
         // Bitbucket Server API - remove needs-work status
-        const username = this.username.replace('@', '_');
+        const username = this.username.replace(/[@+]/g, '_');
         const apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/participants/${username}`;
         await this.apiClient.makeRequest<any>('put', apiPath, { status: 'UNAPPROVED' });
       } else {

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2026-01-08
+
+### Fixed
+- **Fixed username encoding for Bitbucket Server participant endpoints**:
+  - Usernames containing `+` characters (e.g., `user+1@domain.com`) are now properly converted to slug format
+  - Both `@` and `+` are replaced with `_` to match Bitbucket Server's user slug format
+  - Affects `approve_pull_request`, `unapprove_pull_request`, `request_changes`, and `remove_requested_changes` tools
+  - Previously, the `+` character would cause 404 errors when approving/requesting changes on PRs
+
 ## [1.1.2] - 2025-10-14
 
 ### Added
