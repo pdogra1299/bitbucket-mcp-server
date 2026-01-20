@@ -307,7 +307,7 @@ export const toolDefinitions = [
   },
   {
     name: 'get_pull_request_diff',
-    description: 'Get the diff/changes for a pull request with optional filtering',
+    description: 'Get the diff/changes for a pull request with structured line-by-line information. Returns files with hunks containing individual lines, each with source_line (line number in old file), destination_line (line number in new file), type (ADDED/REMOVED/CONTEXT), and content. For adding inline comments: use destination_line with line_type ADDED or CONTEXT, use source_line with line_type REMOVED.',
     inputSchema: {
       type: 'object',
       properties: {

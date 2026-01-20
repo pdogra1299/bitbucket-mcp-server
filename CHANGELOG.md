@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.3] - 2026-01-20
+
+### Added
+- **Structured diff response for `get_pull_request_diff` tool (Bitbucket Server)**:
+  - Returns structured JSON with line-by-line information instead of raw unified diff
+  - Each line includes `source_line`, `destination_line`, `type` (ADDED/REMOVED/CONTEXT), and `content`
+  - Files organized into hunks with start positions and spans
+  - Makes it easy for AI tools to add inline comments with correct line numbers
+  - Native file path filtering via Bitbucket API (added file path to URL)
+
+### Changed
+- **Bitbucket Server now uses JSON API** (`Accept: application/json`) instead of text/plain for diff endpoint
+- Response format changed from `{ diff: "raw diff string" }` to structured `{ files: [...] }` format
+- Updated tool description to document structured response and line number usage
+- Updated README with comprehensive documentation of new response format
+
+### How to Use for Inline Comments
+| Line Type | Line Number to Use | `line_type` param |
+|-----------|-------------------|-------------------|
+| `ADDED` | `destination_line` | `"ADDED"` |
+| `REMOVED` | `source_line` | `"REMOVED"` |
+| `CONTEXT` | `destination_line` | `"CONTEXT"` |
+
+### Note
+- Bitbucket Cloud continues to use raw diff format (unchanged)
+- Glob pattern filtering (`include_patterns`/`exclude_patterns`) still works client-side
+
 ## [1.1.3] - 2026-01-08
 
 ### Fixed

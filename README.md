@@ -911,7 +911,7 @@ This tool is particularly useful for:
 
 ### Get Pull Request Diff
 
-Get the diff/changes for a pull request with optional filtering capabilities:
+Get the diff/changes for a pull request with structured line-by-line information. Returns files with hunks containing individual lines, each with line numbers and type information for easy inline commenting.
 
 ```typescript
 // Get full diff (default behavior)
@@ -977,23 +977,104 @@ Get the diff/changes for a pull request with optional filtering capabilities:
 - `file_path`: Get diff for a specific file only
 - Patterns support standard glob syntax (e.g., `*.js`, `src/**/*.res`, `!test/**`)
 
-**Response includes filtering metadata:**
+**Structured Response Format (Bitbucket Server):**
+
+The response includes structured line-by-line information with line numbers, making it easy for AI tools to add inline comments:
+
 ```json
 {
   "message": "Pull request diff retrieved successfully",
   "pull_request_id": 123,
-  "diff": "..filtered diff content..",
-  "filter_metadata": {
-    "total_files": 15,
-    "included_files": 12,
-    "excluded_files": 3,
-    "excluded_file_list": ["package-lock.json", "logo.svg", "yarn.lock"],
-    "filters_applied": {
-      "exclude_patterns": ["*.lock", "*.svg"]
+  "from_hash": "abc123...",
+  "to_hash": "def456...",
+  "files": [
+    {
+      "file_path": "src/components/Button.res",
+      "old_path": null,
+      "status": "modified",
+      "hunks": [
+        {
+          "context": "let make = () => {",
+          "source_start": 27,
+          "source_span": 6,
+          "destination_start": 27,
+          "destination_span": 7,
+          "lines": [
+            {
+              "source_line": 27,
+              "destination_line": 27,
+              "type": "CONTEXT",
+              "content": "  let onClick = () => {"
+            },
+            {
+              "source_line": 28,
+              "destination_line": 28,
+              "type": "CONTEXT",
+              "content": "    setLoading(true)"
+            },
+            {
+              "source_line": 29,
+              "destination_line": 29,
+              "type": "REMOVED",
+              "content": "    oldFunction()"
+            },
+            {
+              "source_line": 29,
+              "destination_line": 29,
+              "type": "ADDED",
+              "content": "    newFunction()"
+            },
+            {
+              "source_line": 30,
+              "destination_line": 30,
+              "type": "CONTEXT",
+              "content": "  }"
+            }
+          ]
+        }
+      ]
     }
+  ],
+  "summary": {
+    "total_files": 15,
+    "files_included": 1,
+    "files_excluded": 14
+  },
+  "filter_metadata": {
+    "filters_applied": {
+      "file_path": "src/components/Button.res"
+    },
+    "excluded_file_list": ["package-lock.json", "logo.svg"]
   }
 }
 ```
+
+**Line Types and Usage with `add_comment`:**
+
+| Line Type | Description | Use with `add_comment` |
+|-----------|-------------|------------------------|
+| `ADDED` | New line (green in diff) | Use `destination_line` as `line_number`, `line_type: "ADDED"` |
+| `REMOVED` | Deleted line (red in diff) | Use `source_line` as `line_number`, `line_type: "REMOVED"` |
+| `CONTEXT` | Unchanged context line | Use `destination_line` as `line_number`, `line_type: "CONTEXT"` |
+
+**Example: Adding an inline comment on an ADDED line:**
+```typescript
+// From the diff response, we see line 29 was added with content "    newFunction()"
+{
+  "tool": "add_comment",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "file_path": "src/components/Button.res",
+    "line_number": 29,  // Use destination_line for ADDED
+    "line_type": "ADDED",
+    "comment_text": "Consider adding error handling here"
+  }
+}
+```
+
+**Note:** Bitbucket Cloud currently returns raw diff format. The structured format is available for Bitbucket Server only.
 
 ### Approve Pull Request
 
