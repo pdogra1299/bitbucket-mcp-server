@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-01-25
+
+### Added
+
+- **New `search_repositories` tool (Bitbucket Server only)**:
+  - Search for repositories by name or description across all accessible projects
+  - Optional filtering by project/workspace
+  - Uses Bitbucket Server's search API for efficient repository discovery
+  - Configurable result limit
+
+- **New `decline_pull_request` tool**:
+  - Decline/reject a pull request with optional comment
+  - Works with both Bitbucket Server and Cloud
+  - Fetches current PR version automatically to handle optimistic locking
+
+- **New `delete_comment` tool**:
+  - Delete a comment from a pull request
+  - Handles version tracking automatically
+  - Returns appropriate error for comments with replies (which cannot be deleted)
+  - Only comment author, PR author, or repo admin can delete comments
+
+- **New PR Task Management tools (Bitbucket Server only)**:
+  - Tasks are checklist items on pull requests (implemented as BLOCKER severity comments)
+  - `list_pr_tasks` - List all tasks on a PR with open/resolved summary
+  - `create_pr_task` - Create a new task directly on a PR
+  - `update_pr_task` - Edit the text of an existing task
+  - `mark_pr_task_done` - Mark a task as resolved
+  - `unmark_pr_task_done` - Reopen a resolved task
+  - `delete_pr_task` - Delete a task from a PR
+  - `convert_comment_to_task` - Convert a regular comment to a task
+  - `convert_task_to_comment` - Convert a task back to a regular comment
+
+### Changed
+
+- Enhanced `BitbucketServerSearchRequest` type to include `repositories` entity and `limits` for pagination
+- Enhanced `BitbucketServerSearchResult` type to include repository search results
+- Added new type guards for all new tools
+- Updated README with comprehensive documentation for all new tools
+
+### Technical Details
+
+- Tasks use `severity: "BLOCKER"` for tasks and `severity: "NORMAL"` for regular comments
+- Task state can be `OPEN` or `RESOLVED`
+- All task operations require version tracking for optimistic locking
+
 ## [1.2.3] - 2026-01-20
 
 ### Added

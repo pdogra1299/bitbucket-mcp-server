@@ -461,6 +461,10 @@ export interface BitbucketServerSearchRequest {
       start?: number;
       limit?: number;
     };
+    repositories?: {};
+  };
+  limits?: {
+    primary?: number;
   };
 }
 
@@ -498,6 +502,28 @@ export interface BitbucketServerSearchResult {
       }>>;
       pathMatches: Array<any>;
       hitCount: number;
+    }>;
+  };
+  repositories?: {
+    category: string;
+    isLastPage: boolean;
+    count: number;
+    start: number;
+    nextStart?: number;
+    values: Array<{
+      slug: string;
+      name: string;
+      description?: string;
+      project: {
+        key: string;
+        name: string;
+      };
+      links?: {
+        self: Array<{ href: string }>;
+        clone?: Array<{ href: string; name: string }>;
+      };
+      public?: boolean;
+      scmId?: string;
     }>;
   };
   query?: {

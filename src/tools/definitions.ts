@@ -250,6 +250,58 @@ export const toolDefinitions = [
     },
   },
   {
+    name: 'decline_pull_request',
+    description: 'Decline/reject a pull request',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        pull_request_id: {
+          type: 'number',
+          description: 'Pull request ID',
+        },
+        comment: {
+          type: 'string',
+          description: 'Optional comment explaining why the PR is being declined',
+        },
+      },
+      required: ['workspace', 'repository', 'pull_request_id'],
+    },
+  },
+  {
+    name: 'delete_comment',
+    description: 'Delete a comment from a pull request. Note: Comments with replies cannot be deleted.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        pull_request_id: {
+          type: 'number',
+          description: 'Pull request ID',
+        },
+        comment_id: {
+          type: 'number',
+          description: 'Comment ID to delete',
+        },
+      },
+      required: ['workspace', 'repository', 'pull_request_id', 'comment_id'],
+    },
+  },
+  {
     name: 'list_branches',
     description: 'List branches in a repository',
     inputSchema: {
@@ -660,6 +712,28 @@ export const toolDefinitions = [
     },
   },
   {
+    name: 'search_repositories',
+    description: 'Search for repositories by name or description (Bitbucket Server only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        search_query: {
+          type: 'string',
+          description: 'Repository name or keyword to search for (e.g., "backend", "dashboard")',
+        },
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key to filter search (optional, e.g., "PROJ")',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of repositories to return (default: 10)',
+        },
+      },
+      required: ['search_query'],
+    },
+  },
+  {
     name: 'list_projects',
     description: 'List all accessible Bitbucket projects with optional filtering',
     inputSchema: {
@@ -713,6 +787,215 @@ export const toolDefinitions = [
         },
       },
       required: [],
+    },
+  },
+  // PR Task tools
+  {
+    name: 'list_pr_tasks',
+    description: 'List all tasks (checklist items) on a pull request (Bitbucket Server only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        pull_request_id: {
+          type: 'number',
+          description: 'Pull request ID',
+        },
+      },
+      required: ['workspace', 'repository', 'pull_request_id'],
+    },
+  },
+  {
+    name: 'create_pr_task',
+    description: 'Create a new task (checklist item) on a pull request (Bitbucket Server only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        pull_request_id: {
+          type: 'number',
+          description: 'Pull request ID',
+        },
+        text: {
+          type: 'string',
+          description: 'Task description text',
+        },
+      },
+      required: ['workspace', 'repository', 'pull_request_id', 'text'],
+    },
+  },
+  {
+    name: 'update_pr_task',
+    description: 'Update the text of an existing task on a pull request (Bitbucket Server only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        pull_request_id: {
+          type: 'number',
+          description: 'Pull request ID',
+        },
+        task_id: {
+          type: 'number',
+          description: 'Task ID to update',
+        },
+        text: {
+          type: 'string',
+          description: 'New task description text',
+        },
+      },
+      required: ['workspace', 'repository', 'pull_request_id', 'task_id', 'text'],
+    },
+  },
+  {
+    name: 'mark_pr_task_done',
+    description: 'Mark a task as done/resolved on a pull request (Bitbucket Server only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        pull_request_id: {
+          type: 'number',
+          description: 'Pull request ID',
+        },
+        task_id: {
+          type: 'number',
+          description: 'Task ID to mark as done',
+        },
+      },
+      required: ['workspace', 'repository', 'pull_request_id', 'task_id'],
+    },
+  },
+  {
+    name: 'unmark_pr_task_done',
+    description: 'Reopen a resolved task on a pull request (Bitbucket Server only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        pull_request_id: {
+          type: 'number',
+          description: 'Pull request ID',
+        },
+        task_id: {
+          type: 'number',
+          description: 'Task ID to reopen',
+        },
+      },
+      required: ['workspace', 'repository', 'pull_request_id', 'task_id'],
+    },
+  },
+  {
+    name: 'delete_pr_task',
+    description: 'Delete a task from a pull request (Bitbucket Server only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        pull_request_id: {
+          type: 'number',
+          description: 'Pull request ID',
+        },
+        task_id: {
+          type: 'number',
+          description: 'Task ID to delete',
+        },
+      },
+      required: ['workspace', 'repository', 'pull_request_id', 'task_id'],
+    },
+  },
+  {
+    name: 'convert_comment_to_task',
+    description: 'Convert an existing comment to a task on a pull request (Bitbucket Server only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        pull_request_id: {
+          type: 'number',
+          description: 'Pull request ID',
+        },
+        comment_id: {
+          type: 'number',
+          description: 'Comment ID to convert to a task',
+        },
+      },
+      required: ['workspace', 'repository', 'pull_request_id', 'comment_id'],
+    },
+  },
+  {
+    name: 'convert_task_to_comment',
+    description: 'Convert a task back to a regular comment on a pull request (Bitbucket Server only)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        pull_request_id: {
+          type: 'number',
+          description: 'Pull request ID',
+        },
+        task_id: {
+          type: 'number',
+          description: 'Task ID to convert to a comment',
+        },
+      },
+      required: ['workspace', 'repository', 'pull_request_id', 'task_id'],
     },
   },
 ];

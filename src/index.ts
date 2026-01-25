@@ -44,7 +44,7 @@ class BitbucketMCPServer {
     this.server = new Server(
       {
         name: 'bitbucket-mcp-server',
-        version: '1.2.3',
+        version: '1.3.0',
       },
       {
         capabilities: {
@@ -107,7 +107,29 @@ class BitbucketMCPServer {
           return this.pullRequestHandlers.handleMergePullRequest(request.params.arguments);
         case 'list_pr_commits':
           return this.pullRequestHandlers.handleListPrCommits(request.params.arguments);
-        
+        case 'decline_pull_request':
+          return this.pullRequestHandlers.handleDeclinePullRequest(request.params.arguments);
+        case 'delete_comment':
+          return this.pullRequestHandlers.handleDeleteComment(request.params.arguments);
+
+        // PR Task tools
+        case 'list_pr_tasks':
+          return this.pullRequestHandlers.handleListPrTasks(request.params.arguments);
+        case 'create_pr_task':
+          return this.pullRequestHandlers.handleCreatePrTask(request.params.arguments);
+        case 'update_pr_task':
+          return this.pullRequestHandlers.handleUpdatePrTask(request.params.arguments);
+        case 'mark_pr_task_done':
+          return this.pullRequestHandlers.handleMarkPrTaskDone(request.params.arguments);
+        case 'unmark_pr_task_done':
+          return this.pullRequestHandlers.handleUnmarkPrTaskDone(request.params.arguments);
+        case 'delete_pr_task':
+          return this.pullRequestHandlers.handleDeletePrTask(request.params.arguments);
+        case 'convert_comment_to_task':
+          return this.pullRequestHandlers.handleConvertCommentToTask(request.params.arguments);
+        case 'convert_task_to_comment':
+          return this.pullRequestHandlers.handleConvertTaskToComment(request.params.arguments);
+
         // Branch tools
         case 'list_branches':
           return this.branchHandlers.handleListBranches(request.params.arguments);
@@ -139,6 +161,8 @@ class BitbucketMCPServer {
         // Search tools
         case 'search_code':
           return this.searchHandlers.handleSearchCode(request.params.arguments);
+        case 'search_repositories':
+          return this.searchHandlers.handleSearchRepositories(request.params.arguments);
 
         // Project tools
         case 'list_projects':

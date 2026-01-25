@@ -25,7 +25,14 @@ import {
   isUpdatePullRequestArgs,
   isAddCommentArgs,
   isMergePullRequestArgs,
-  isListPrCommitsArgs
+  isListPrCommitsArgs,
+  isDeclinePullRequestArgs,
+  isDeleteCommentArgs,
+  isListPrTasksArgs,
+  isCreatePrTaskArgs,
+  isUpdatePrTaskArgs,
+  isTaskIdArgs,
+  isConvertCommentToTaskArgs
 } from '../types/guards.js';
 
 export class PullRequestHandlers {
@@ -1118,6 +1125,127 @@ export class PullRequestHandlers {
     return matches.sort((a, b) => b.confidence - a.confidence)[0];
   }
 
+  async handleDeclinePullRequest(args: any) {
+    if (!isDeclinePullRequestArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for decline_pull_request'
+      );
+    }
+
+    const { workspace, repository, pull_request_id, comment } = args;
+
+    try {
+      // First get the PR to obtain the current version
+      const prPath = this.apiClient.getIsServer()
+        ? `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}`
+        : `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}`;
+
+      const pr = await this.apiClient.makeRequest<any>('get', prPath);
+
+      if (this.apiClient.getIsServer()) {
+        const version = pr.version;
+        const declinePath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/decline`;
+
+        await this.apiClient.makeRequest('post', declinePath, undefined, {
+          params: { version }
+        });
+      } else {
+        // Bitbucket Cloud
+        const declinePath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/decline`;
+        await this.apiClient.makeRequest('post', declinePath);
+      }
+
+      // Optionally add a comment explaining the decline
+      if (comment) {
+        await this.handleAddComment({
+          workspace,
+          repository,
+          pull_request_id,
+          comment_text: comment
+        });
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Pull request #${pull_request_id} has been declined.${comment ? ' Comment added.' : ''}`
+        }]
+      };
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            error: `Failed to decline pull request: ${errorMessage}`,
+            details: error.response?.data
+          }, null, 2)
+        }],
+        isError: true
+      };
+    }
+  }
+
+  async handleDeleteComment(args: any) {
+    if (!isDeleteCommentArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for delete_comment'
+      );
+    }
+
+    const { workspace, repository, pull_request_id, comment_id } = args;
+
+    try {
+      if (this.apiClient.getIsServer()) {
+        // First get the comment to obtain the current version
+        const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${comment_id}`;
+        const comment = await this.apiClient.makeRequest<any>('get', commentPath);
+        const version = comment.version;
+
+        await this.apiClient.makeRequest('delete', commentPath, undefined, {
+          params: { version }
+        });
+      } else {
+        // Bitbucket Cloud
+        const commentPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/comments/${comment_id}`;
+        await this.apiClient.makeRequest('delete', commentPath);
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Comment #${comment_id} has been deleted from pull request #${pull_request_id}.`
+        }]
+      };
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
+
+      // Handle specific error for comments with replies
+      if (error.response?.status === 409) {
+        return {
+          content: [{
+            type: 'text',
+            text: 'Cannot delete this comment because it has replies. Delete the replies first.'
+          }],
+          isError: true
+        };
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            error: `Failed to delete comment: ${errorMessage}`,
+            details: error.response?.data
+          }, null, 2)
+        }],
+        isError: true
+      };
+    }
+  }
+
   async handleListPrCommits(args: any) {
     if (!isListPrCommitsArgs(args)) {
       throw new McpError(
@@ -1236,6 +1364,384 @@ export class PullRequestHandlers {
       };
     } catch (error) {
       return this.apiClient.handleApiError(error, `listing commits for pull request ${pull_request_id} in ${workspace}/${repository}`);
+    }
+  }
+
+  // PR Task handlers
+  async handleListPrTasks(args: any) {
+    if (!isListPrTasksArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for list_pr_tasks'
+      );
+    }
+
+    const { workspace, repository, pull_request_id } = args;
+
+    try {
+      if (!this.apiClient.getIsServer()) {
+        throw new Error('PR tasks are currently only supported for Bitbucket Server');
+      }
+
+      // Get all activities and filter for BLOCKER comments (tasks)
+      const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/activities`;
+      const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
+        params: { limit: 1000 }
+      });
+
+      const activities = response.values || [];
+
+      // Filter for comments with severity BLOCKER (these are tasks)
+      const tasks = activities
+        .filter((a: any) => a.action === 'COMMENTED' && a.comment?.severity === 'BLOCKER')
+        .map((a: any) => ({
+          id: a.comment.id,
+          text: a.comment.text,
+          author: a.comment.author?.displayName || a.comment.author?.name,
+          state: a.comment.state || 'OPEN',
+          created_on: new Date(a.comment.createdDate).toISOString(),
+          is_resolved: a.comment.state === 'RESOLVED'
+        }));
+
+      const openTasks = tasks.filter((t: any) => t.state === 'OPEN');
+      const resolvedTasks = tasks.filter((t: any) => t.state === 'RESOLVED');
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            pull_request_id,
+            tasks,
+            summary: {
+              total: tasks.length,
+              open: openTasks.length,
+              resolved: resolvedTasks.length
+            }
+          }, null, 2)
+        }]
+      };
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            error: `Failed to list PR tasks: ${errorMessage}`,
+            details: error.response?.data
+          }, null, 2)
+        }],
+        isError: true
+      };
+    }
+  }
+
+  async handleCreatePrTask(args: any) {
+    if (!isCreatePrTaskArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for create_pr_task'
+      );
+    }
+
+    const { workspace, repository, pull_request_id, text } = args;
+
+    try {
+      if (!this.apiClient.getIsServer()) {
+        throw new Error('PR tasks are currently only supported for Bitbucket Server');
+      }
+
+      const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments`;
+      const requestBody = {
+        text: text,
+        severity: 'BLOCKER'
+      };
+
+      const task = await this.apiClient.makeRequest<any>('post', apiPath, requestBody);
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            message: 'Task created successfully',
+            task: {
+              id: task.id,
+              text: task.text,
+              author: task.author?.displayName || task.author?.name,
+              state: task.state || 'OPEN',
+              created_on: new Date(task.createdDate).toISOString()
+            }
+          }, null, 2)
+        }]
+      };
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            error: `Failed to create PR task: ${errorMessage}`,
+            details: error.response?.data
+          }, null, 2)
+        }],
+        isError: true
+      };
+    }
+  }
+
+  async handleUpdatePrTask(args: any) {
+    if (!isUpdatePrTaskArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for update_pr_task'
+      );
+    }
+
+    const { workspace, repository, pull_request_id, task_id, text } = args;
+
+    try {
+      if (!this.apiClient.getIsServer()) {
+        throw new Error('PR tasks are currently only supported for Bitbucket Server');
+      }
+
+      // First get the current task to get version
+      const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${task_id}`;
+      const comment = await this.apiClient.makeRequest<any>('get', commentPath);
+
+      const requestBody = {
+        text: text,
+        version: comment.version
+      };
+
+      const updatedTask = await this.apiClient.makeRequest<any>('put', commentPath, requestBody);
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            message: 'Task updated successfully',
+            task: {
+              id: updatedTask.id,
+              text: updatedTask.text,
+              state: updatedTask.state || 'OPEN'
+            }
+          }, null, 2)
+        }]
+      };
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            error: `Failed to update PR task: ${errorMessage}`,
+            details: error.response?.data
+          }, null, 2)
+        }],
+        isError: true
+      };
+    }
+  }
+
+  async handleMarkPrTaskDone(args: any) {
+    if (!isTaskIdArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for mark_pr_task_done'
+      );
+    }
+
+    const { workspace, repository, pull_request_id, task_id } = args;
+
+    try {
+      if (!this.apiClient.getIsServer()) {
+        throw new Error('PR tasks are currently only supported for Bitbucket Server');
+      }
+
+      const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${task_id}`;
+      const comment = await this.apiClient.makeRequest<any>('get', commentPath);
+
+      const requestBody = {
+        state: 'RESOLVED',
+        version: comment.version
+      };
+
+      await this.apiClient.makeRequest<any>('put', commentPath, requestBody);
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Task #${task_id} has been marked as done.`
+        }]
+      };
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            error: `Failed to mark task as done: ${errorMessage}`,
+            details: error.response?.data
+          }, null, 2)
+        }],
+        isError: true
+      };
+    }
+  }
+
+  async handleUnmarkPrTaskDone(args: any) {
+    if (!isTaskIdArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for unmark_pr_task_done'
+      );
+    }
+
+    const { workspace, repository, pull_request_id, task_id } = args;
+
+    try {
+      if (!this.apiClient.getIsServer()) {
+        throw new Error('PR tasks are currently only supported for Bitbucket Server');
+      }
+
+      const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${task_id}`;
+      const comment = await this.apiClient.makeRequest<any>('get', commentPath);
+
+      const requestBody = {
+        state: 'OPEN',
+        version: comment.version
+      };
+
+      await this.apiClient.makeRequest<any>('put', commentPath, requestBody);
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Task #${task_id} has been reopened.`
+        }]
+      };
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            error: `Failed to reopen task: ${errorMessage}`,
+            details: error.response?.data
+          }, null, 2)
+        }],
+        isError: true
+      };
+    }
+  }
+
+  async handleDeletePrTask(args: any) {
+    if (!isTaskIdArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for delete_pr_task'
+      );
+    }
+
+    const { workspace, repository, pull_request_id, task_id } = args;
+
+    // Reuse existing delete comment handler
+    return this.handleDeleteComment({
+      workspace,
+      repository,
+      pull_request_id,
+      comment_id: task_id
+    });
+  }
+
+  async handleConvertCommentToTask(args: any) {
+    if (!isConvertCommentToTaskArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for convert_comment_to_task'
+      );
+    }
+
+    const { workspace, repository, pull_request_id, comment_id } = args;
+
+    try {
+      if (!this.apiClient.getIsServer()) {
+        throw new Error('PR tasks are currently only supported for Bitbucket Server');
+      }
+
+      const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${comment_id}`;
+      const comment = await this.apiClient.makeRequest<any>('get', commentPath);
+
+      const requestBody = {
+        severity: 'BLOCKER',
+        version: comment.version
+      };
+
+      await this.apiClient.makeRequest<any>('put', commentPath, requestBody);
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Comment #${comment_id} has been converted to a task.`
+        }]
+      };
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            error: `Failed to convert comment to task: ${errorMessage}`,
+            details: error.response?.data
+          }, null, 2)
+        }],
+        isError: true
+      };
+    }
+  }
+
+  async handleConvertTaskToComment(args: any) {
+    if (!isTaskIdArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for convert_task_to_comment'
+      );
+    }
+
+    const { workspace, repository, pull_request_id, task_id } = args;
+
+    try {
+      if (!this.apiClient.getIsServer()) {
+        throw new Error('PR tasks are currently only supported for Bitbucket Server');
+      }
+
+      const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${task_id}`;
+      const comment = await this.apiClient.makeRequest<any>('get', commentPath);
+
+      const requestBody = {
+        severity: 'NORMAL',
+        version: comment.version
+      };
+
+      await this.apiClient.makeRequest<any>('put', commentPath, requestBody);
+
+      return {
+        content: [{
+          type: 'text',
+          text: `Task #${task_id} has been converted to a comment.`
+        }]
+      };
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            error: `Failed to convert task to comment: ${errorMessage}`,
+            details: error.response?.data
+          }, null, 2)
+        }],
+        isError: true
+      };
     }
   }
 }

@@ -38,6 +38,21 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 
 #### Search Tools
 - `search_code` - Search for code across repositories (currently Bitbucket Server only)
+- `search_repositories` - Search for repositories by name or description (Bitbucket Server only)
+
+#### PR Lifecycle Management Tools
+- `decline_pull_request` - Decline/reject a pull request
+- `delete_comment` - Delete a comment from a pull request
+
+#### PR Task Tools (Bitbucket Server only)
+- `list_pr_tasks` - List all tasks (checklist items) on a pull request
+- `create_pr_task` - Create a new task on a pull request
+- `update_pr_task` - Update the text of an existing task
+- `mark_pr_task_done` - Mark a task as done/resolved
+- `unmark_pr_task_done` - Reopen a resolved task
+- `delete_pr_task` - Delete a task from a pull request
+- `convert_comment_to_task` - Convert an existing comment to a task
+- `convert_task_to_comment` - Convert a task back to a regular comment
 
 #### Project and Repository Discovery Tools
 - `list_projects` - List all accessible Bitbucket projects/workspaces with filtering
@@ -1372,6 +1387,207 @@ This tool is particularly useful for:
 - Identifying repositories you have specific permissions on
 - Getting clone URLs for repositories
 - Browsing repository structure within an organization
+
+### Search Repositories
+
+Search for repositories by name or description (Bitbucket Server only):
+
+```typescript
+// Basic search
+{
+  "tool": "search_repositories",
+  "arguments": {
+    "search_query": "backend",
+    "limit": 10
+  }
+}
+
+// Search within a specific project
+{
+  "tool": "search_repositories",
+  "arguments": {
+    "search_query": "dashboard",
+    "workspace": "PROJ",
+    "limit": 25
+  }
+}
+```
+
+Returns repository search results with project association.
+
+### Decline Pull Request
+
+Decline/reject a pull request:
+
+```typescript
+{
+  "tool": "decline_pull_request",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "comment": "Closing this PR as the feature is no longer needed"  // Optional
+  }
+}
+```
+
+### Delete Comment
+
+Delete a comment from a pull request:
+
+```typescript
+{
+  "tool": "delete_comment",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "comment_id": 456
+  }
+}
+```
+
+**Note**: Comments with replies cannot be deleted. Only the comment author, PR author, or repository admin can delete comments.
+
+### PR Task Management (Bitbucket Server only)
+
+Tasks are checklist items that can be added to pull requests. They help track action items that need to be completed before merging.
+
+#### List PR Tasks
+
+```typescript
+{
+  "tool": "list_pr_tasks",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123
+  }
+}
+```
+
+Returns all tasks with their status:
+```json
+{
+  "pull_request_id": 123,
+  "tasks": [
+    {
+      "id": 456,
+      "text": "Update documentation",
+      "author": "John Doe",
+      "state": "OPEN",
+      "created_on": "2025-01-25T10:00:00Z",
+      "is_resolved": false
+    }
+  ],
+  "summary": {
+    "total": 3,
+    "open": 2,
+    "resolved": 1
+  }
+}
+```
+
+#### Create PR Task
+
+```typescript
+{
+  "tool": "create_pr_task",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "text": "Add unit tests for the new feature"
+  }
+}
+```
+
+#### Update PR Task
+
+```typescript
+{
+  "tool": "update_pr_task",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "task_id": 456,
+    "text": "Add unit tests and integration tests"
+  }
+}
+```
+
+#### Mark/Unmark Task as Done
+
+```typescript
+// Mark as done
+{
+  "tool": "mark_pr_task_done",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "task_id": 456
+  }
+}
+
+// Reopen task
+{
+  "tool": "unmark_pr_task_done",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "task_id": 456
+  }
+}
+```
+
+#### Delete PR Task
+
+```typescript
+{
+  "tool": "delete_pr_task",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "task_id": 456
+  }
+}
+```
+
+#### Convert Between Comments and Tasks
+
+```typescript
+// Convert a comment to a task
+{
+  "tool": "convert_comment_to_task",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "comment_id": 456
+  }
+}
+
+// Convert a task back to a comment
+{
+  "tool": "convert_task_to_comment",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "task_id": 456
+  }
+}
+```
+
+**Note on Tasks:**
+- Tasks are implemented as comments with `severity: "BLOCKER"` in Bitbucket Server
+- Tasks can be in `OPEN` or `RESOLVED` state
+- Only the task creator, PR author, or repository admin can edit text or delete tasks
+- Anyone with read access can mark tasks as done/undone
 
 ## Development
 
