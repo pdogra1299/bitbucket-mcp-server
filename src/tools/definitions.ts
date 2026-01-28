@@ -542,6 +542,40 @@ export const toolDefinitions = [
     },
   },
   {
+    name: 'search_files',
+    description: 'Search for files by name or path pattern in a repository. Returns matching file paths recursively.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: {
+          type: 'string',
+          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
+        },
+        repository: {
+          type: 'string',
+          description: 'Repository slug (e.g., "my-repo")',
+        },
+        pattern: {
+          type: 'string',
+          description: 'Glob pattern to filter files (e.g., "*.ts", "**/*.java", "**/Controller*"). If not provided, returns all files.',
+        },
+        path: {
+          type: 'string',
+          description: 'Subdirectory to search within (optional, defaults to repository root)',
+        },
+        branch: {
+          type: 'string',
+          description: 'Branch name (optional, defaults to default branch)',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of matching files to return (default: 100)',
+        },
+      },
+      required: ['workspace', 'repository'],
+    },
+  },
+  {
     name: 'get_file_content',
     description: 'Get file content from a repository with smart truncation for large files',
     inputSchema: {

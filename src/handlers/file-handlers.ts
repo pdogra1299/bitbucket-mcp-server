@@ -2,8 +2,10 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { BitbucketApiClient } from '../utils/api-client.js';
 import {
   isListDirectoryContentArgs,
-  isGetFileContentArgs
+  isGetFileContentArgs,
+  isSearchFilesArgs
 } from '../types/guards.js';
+import { minimatch } from 'minimatch';
 import {
   BitbucketServerDirectoryEntry,
   BitbucketCloudDirectoryEntry,
@@ -340,13 +342,120 @@ export class FileHandlers {
     if (fileSize < 50 * 1024) { // 50KB
       return { full: true };
     }
-    
+
     const ext = path.extname(filePath).toLowerCase();
     const defaultLines = this.DEFAULT_LINES_BY_EXT[ext] || 500;
-    
+
     return {
       start: defaultLines < 0 ? defaultLines : 1,
       count: Math.abs(defaultLines)
     };
+  }
+
+  async handleSearchFiles(args: any) {
+    if (!isSearchFilesArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for search_files'
+      );
+    }
+
+    const { workspace, repository, pattern, path: searchPath, branch, limit = 100 } = args;
+
+    try {
+      let allFiles: string[] = [];
+
+      if (this.apiClient.getIsServer()) {
+        // Bitbucket Server API - /files endpoint returns all files recursively
+        let apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/files`;
+        if (searchPath) {
+          apiPath += `/${searchPath}`;
+        }
+
+        const params: any = {
+          limit: 100000 // Fetch all files
+        };
+        if (branch) {
+          params.at = `refs/heads/${branch}`;
+        }
+
+        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
+
+        // Server returns array of file paths directly or paginated response
+        if (Array.isArray(response)) {
+          allFiles = response;
+        } else if (response.values) {
+          allFiles = response.values;
+        }
+      } else {
+        // Bitbucket Cloud - need to recursively traverse directories
+        // For now, use the src endpoint with max_depth
+        const branchOrDefault = branch || 'HEAD';
+        let apiPath = `/repositories/${workspace}/${repository}/src/${branchOrDefault}`;
+        if (searchPath) {
+          apiPath += `/${searchPath}`;
+        }
+
+        // Cloud requires recursive traversal - fetch with max_depth
+        const params: any = {
+          max_depth: 10,
+          pagelen: 100
+        };
+
+        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
+
+        // Extract file paths from Cloud response
+        const entries = response.values || [];
+        allFiles = entries
+          .filter((entry: any) => entry.type === 'commit_file')
+          .map((entry: any) => entry.path);
+      }
+
+      // Apply pattern filtering if provided (case-insensitive like VS Code's file search)
+      let matchedFiles = allFiles;
+      if (pattern) {
+        matchedFiles = allFiles.filter(filePath => {
+          // Try matching with the pattern as-is
+          if (minimatch(filePath, pattern, { matchBase: true, nocase: true })) {
+            return true;
+          }
+          // Also try with **/ prefix for convenience
+          if (!pattern.startsWith('**/') && minimatch(filePath, `**/${pattern}`, { matchBase: true, nocase: true })) {
+            return true;
+          }
+          return false;
+        });
+      }
+
+      // Apply limit to results
+      const totalMatched = matchedFiles.length;
+      const truncated = totalMatched > limit;
+      const resultFiles = matchedFiles.slice(0, limit);
+
+      // Build response
+      const response = {
+        workspace,
+        repository,
+        branch: branch || 'default',
+        search_path: searchPath || '/',
+        pattern: pattern || '*',
+        files: resultFiles,
+        total_files_scanned: allFiles.length,
+        total_matched: totalMatched,
+        returned: resultFiles.length,
+        truncated
+      };
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(response, null, 2),
+          },
+        ],
+      };
+    } catch (error: any) {
+      return this.apiClient.handleApiError(error, `searching files in ${workspace}/${repository}`);
+    }
   }
 }

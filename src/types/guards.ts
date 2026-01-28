@@ -241,6 +241,25 @@ export const isListDirectoryContentArgs = (
   (args.path === undefined || typeof args.path === 'string') &&
   (args.branch === undefined || typeof args.branch === 'string');
 
+export const isSearchFilesArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  pattern?: string;
+  path?: string;
+  branch?: string;
+  limit?: number;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  (args.pattern === undefined || typeof args.pattern === 'string') &&
+  (args.path === undefined || typeof args.path === 'string') &&
+  (args.branch === undefined || typeof args.branch === 'string') &&
+  (args.limit === undefined || typeof args.limit === 'number');
+
 export const isGetFileContentArgs = (
   args: any
 ): args is {

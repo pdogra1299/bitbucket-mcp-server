@@ -27,6 +27,7 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 
 #### File and Directory Tools
 - `list_directory_content` - List files and directories in a repository path
+- `search_files` - Search for files by name or path pattern in a repository (glob patterns, case-insensitive)
 - `get_file_content` - Get file content with smart truncation for large files
 
 #### Code Review Tools
@@ -1140,6 +1141,101 @@ Returns directory listing with:
   - Size (for files)
   - Full path
 - Total items count
+
+### Search Files
+
+Search for files by name or path pattern in a repository. Uses glob patterns with case-insensitive matching (like VS Code's Ctrl+P file search).
+
+```typescript
+// Search for all TypeScript files
+{
+  "tool": "search_files",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pattern": "*.ts"
+  }
+}
+
+// Search for files containing "Controller" in the name
+{
+  "tool": "search_files",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pattern": "**/Controller*"
+  }
+}
+
+// Search within a specific directory
+{
+  "tool": "search_files",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pattern": "*.res",
+    "path": "src/components"
+  }
+}
+
+// Search on a specific branch with result limit
+{
+  "tool": "search_files",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pattern": "**/*Config*",
+    "branch": "develop",
+    "limit": 50
+  }
+}
+
+// Case-insensitive search (matches SomeComponent.res, Somefile.res, etc.)
+{
+  "tool": "search_files",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pattern": "**/someFile*"
+  }
+}
+```
+
+**Parameters:**
+- `workspace`: Project key (required)
+- `repository`: Repository slug (required)
+- `pattern`: Glob pattern to filter files (optional, returns all files if not specified)
+  - Supports standard glob syntax: `*.ts`, `**/*.java`, `**/Controller*`
+  - Case-insensitive matching
+- `path`: Subdirectory to search within (optional, defaults to root)
+- `branch`: Branch name (optional, defaults to default branch)
+- `limit`: Maximum number of matching files to return (optional, default: 100)
+
+**Response:**
+```json
+{
+  "workspace": "PROJ",
+  "repository": "my-repo",
+  "branch": "master",
+  "search_path": "/",
+  "pattern": "*.res",
+  "files": [
+    "src/App.res",
+    "src/components/Button.res",
+    "src/utils/DateUtils.res"
+  ],
+  "total_files_scanned": 5000,
+  "total_matched": 150,
+  "returned": 100,
+  "truncated": true
+}
+```
+
+This tool is particularly useful for:
+- Finding files by name pattern (like VS Code's Ctrl+P)
+- Discovering all files of a certain type in a repository
+- Locating configuration files or specific components
+- Exploring unfamiliar codebases
 
 ### Get File Content
 

@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-01-28
+
+### Added
+
+- **New `search_files` tool for finding files by name or path pattern**:
+  - Search for files using glob patterns (e.g., `*.ts`, `**/*Controller*`, `src/**/*.res`)
+  - Case-insensitive matching for user-friendly searches (like VS Code's Ctrl+P)
+  - Supports searching within specific subdirectories via `path` parameter
+  - Branch selection support to search files on any branch
+  - Configurable result limit (default: 100) with truncation indicator
+  - Returns comprehensive response with:
+    - Matched file paths
+    - Total files scanned in repository
+    - Total matches found
+    - Truncation status when results exceed limit
+  - Works with both Bitbucket Server and Cloud
+  - Uses Bitbucket Server's `/files` endpoint for efficient recursive file listing
+  - Client-side glob filtering using `minimatch` library
+
+### Technical Details
+
+- Added `isSearchFilesArgs` type guard for input validation
+- Added `handleSearchFiles` method to `FileHandlers` class
+- Uses `minimatch` with `matchBase: true` and `nocase: true` options for flexible pattern matching
+- Bitbucket Server: Single API call fetches all files recursively
+- Bitbucket Cloud: Uses `/src` endpoint with `max_depth` parameter
+
 ## [1.3.0] - 2026-01-25
 
 ### Added

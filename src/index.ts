@@ -44,7 +44,7 @@ class BitbucketMCPServer {
     this.server = new Server(
       {
         name: 'bitbucket-mcp-server',
-        version: '1.3.0',
+        version: '1.4.0',
       },
       {
         capabilities: {
@@ -157,6 +157,8 @@ class BitbucketMCPServer {
           return this.fileHandlers.handleListDirectoryContent(request.params.arguments);
         case 'get_file_content':
           return this.fileHandlers.handleGetFileContent(request.params.arguments);
+        case 'search_files':
+          return this.fileHandlers.handleSearchFiles(request.params.arguments);
         
         // Search tools
         case 'search_code':
