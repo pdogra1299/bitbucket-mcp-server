@@ -197,4 +197,106 @@ export class SearchHandlers {
       };
     }
   }
+
+  async handleSearchRepositories(args: any) {
+    try {
+      const {
+        search_query,
+        workspace,
+        limit = 10
+      } = args;
+
+      if (!search_query) {
+        throw new Error('search_query is required');
+      }
+
+      // Only works for Bitbucket Server
+      if (!this.apiClient.getIsServer()) {
+        throw new Error('Repository search is currently only supported for Bitbucket Server');
+      }
+
+      // Build query - optionally filter by project
+      let query = search_query.trim();
+      if (workspace) {
+        query = `project:${workspace} ${query}`;
+      }
+
+      // Prepare the request payload
+      const payload: BitbucketServerSearchRequest = {
+        query: query,
+        entities: {
+          repositories: {}
+        },
+        limits: {
+          primary: limit
+        }
+      };
+
+      // Make the API request
+      const response = await this.apiClient.makeRequest<BitbucketServerSearchResult>(
+        'post',
+        `/rest/search/latest/search?avatarSize=64`,
+        payload
+      );
+
+      // Extract repository results
+      const repositories = response.repositories?.values || [];
+      const hasMore = response.repositories?.isLastPage === false;
+      const totalCount = response.repositories?.count || 0;
+
+      // Format results
+      const formattedRepos = repositories.map(repo => ({
+        name: repo.name,
+        slug: repo.slug,
+        project: repo.project.key,
+        project_name: repo.project.name,
+        description: repo.description || '',
+        public: repo.public || false
+      }));
+
+      // Build response text
+      let resultText = `Repository search results for "${search_query}"`;
+      if (workspace) {
+        resultText += ` in project ${workspace}`;
+      }
+      resultText += `\n\nFound ${formattedRepos.length} repositories`;
+      if (totalCount > formattedRepos.length) {
+        resultText += ` (${totalCount} total)`;
+      }
+
+      if (formattedRepos.length > 0) {
+        resultText += ':\n';
+        formattedRepos.forEach(repo => {
+          resultText += `\n- ${repo.project}/${repo.slug}`;
+          resultText += ` (${repo.name})`;
+          if (repo.description) {
+            resultText += `\n  ${repo.description}`;
+          }
+        });
+      }
+
+      if (hasMore) {
+        resultText += `\n\n(More results available)`;
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: resultText
+        }]
+      };
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            error: `Failed to search repositories: ${errorMessage}`,
+            details: error.response?.data
+          }, null, 2)
+        }],
+        isError: true
+      };
+    }
+  }
 }

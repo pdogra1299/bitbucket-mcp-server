@@ -27,6 +27,7 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 
 #### File and Directory Tools
 - `list_directory_content` - List files and directories in a repository path
+- `search_files` - Search for files by name or path pattern in a repository (glob patterns, case-insensitive)
 - `get_file_content` - Get file content with smart truncation for large files
 
 #### Code Review Tools
@@ -38,6 +39,21 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 
 #### Search Tools
 - `search_code` - Search for code across repositories (currently Bitbucket Server only)
+- `search_repositories` - Search for repositories by name or description (Bitbucket Server only)
+
+#### PR Lifecycle Management Tools
+- `decline_pull_request` - Decline/reject a pull request
+- `delete_comment` - Delete a comment from a pull request
+
+#### PR Task Tools (Bitbucket Server only)
+- `list_pr_tasks` - List all tasks (checklist items) on a pull request
+- `create_pr_task` - Create a new task on a pull request
+- `update_pr_task` - Update the text of an existing task
+- `mark_pr_task_done` - Mark a task as done/resolved
+- `unmark_pr_task_done` - Reopen a resolved task
+- `delete_pr_task` - Delete a task from a pull request
+- `convert_comment_to_task` - Convert an existing comment to a task
+- `convert_task_to_comment` - Convert a task back to a regular comment
 
 #### Project and Repository Discovery Tools
 - `list_projects` - List all accessible Bitbucket projects/workspaces with filtering
@@ -911,7 +927,7 @@ This tool is particularly useful for:
 
 ### Get Pull Request Diff
 
-Get the diff/changes for a pull request with optional filtering capabilities:
+Get the diff/changes for a pull request with structured line-by-line information. Returns files with hunks containing individual lines, each with line numbers and type information for easy inline commenting.
 
 ```typescript
 // Get full diff (default behavior)
@@ -977,23 +993,104 @@ Get the diff/changes for a pull request with optional filtering capabilities:
 - `file_path`: Get diff for a specific file only
 - Patterns support standard glob syntax (e.g., `*.js`, `src/**/*.res`, `!test/**`)
 
-**Response includes filtering metadata:**
+**Structured Response Format (Bitbucket Server):**
+
+The response includes structured line-by-line information with line numbers, making it easy for AI tools to add inline comments:
+
 ```json
 {
   "message": "Pull request diff retrieved successfully",
   "pull_request_id": 123,
-  "diff": "..filtered diff content..",
-  "filter_metadata": {
-    "total_files": 15,
-    "included_files": 12,
-    "excluded_files": 3,
-    "excluded_file_list": ["package-lock.json", "logo.svg", "yarn.lock"],
-    "filters_applied": {
-      "exclude_patterns": ["*.lock", "*.svg"]
+  "from_hash": "abc123...",
+  "to_hash": "def456...",
+  "files": [
+    {
+      "file_path": "src/components/Button.res",
+      "old_path": null,
+      "status": "modified",
+      "hunks": [
+        {
+          "context": "let make = () => {",
+          "source_start": 27,
+          "source_span": 6,
+          "destination_start": 27,
+          "destination_span": 7,
+          "lines": [
+            {
+              "source_line": 27,
+              "destination_line": 27,
+              "type": "CONTEXT",
+              "content": "  let onClick = () => {"
+            },
+            {
+              "source_line": 28,
+              "destination_line": 28,
+              "type": "CONTEXT",
+              "content": "    setLoading(true)"
+            },
+            {
+              "source_line": 29,
+              "destination_line": 29,
+              "type": "REMOVED",
+              "content": "    oldFunction()"
+            },
+            {
+              "source_line": 29,
+              "destination_line": 29,
+              "type": "ADDED",
+              "content": "    newFunction()"
+            },
+            {
+              "source_line": 30,
+              "destination_line": 30,
+              "type": "CONTEXT",
+              "content": "  }"
+            }
+          ]
+        }
+      ]
     }
+  ],
+  "summary": {
+    "total_files": 15,
+    "files_included": 1,
+    "files_excluded": 14
+  },
+  "filter_metadata": {
+    "filters_applied": {
+      "file_path": "src/components/Button.res"
+    },
+    "excluded_file_list": ["package-lock.json", "logo.svg"]
   }
 }
 ```
+
+**Line Types and Usage with `add_comment`:**
+
+| Line Type | Description | Use with `add_comment` |
+|-----------|-------------|------------------------|
+| `ADDED` | New line (green in diff) | Use `destination_line` as `line_number`, `line_type: "ADDED"` |
+| `REMOVED` | Deleted line (red in diff) | Use `source_line` as `line_number`, `line_type: "REMOVED"` |
+| `CONTEXT` | Unchanged context line | Use `destination_line` as `line_number`, `line_type: "CONTEXT"` |
+
+**Example: Adding an inline comment on an ADDED line:**
+```typescript
+// From the diff response, we see line 29 was added with content "    newFunction()"
+{
+  "tool": "add_comment",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "file_path": "src/components/Button.res",
+    "line_number": 29,  // Use destination_line for ADDED
+    "line_type": "ADDED",
+    "comment_text": "Consider adding error handling here"
+  }
+}
+```
+
+**Note:** Bitbucket Cloud currently returns raw diff format. The structured format is available for Bitbucket Server only.
 
 ### Approve Pull Request
 
@@ -1044,6 +1141,101 @@ Returns directory listing with:
   - Size (for files)
   - Full path
 - Total items count
+
+### Search Files
+
+Search for files by name or path pattern in a repository. Uses glob patterns with case-insensitive matching (like VS Code's Ctrl+P file search).
+
+```typescript
+// Search for all TypeScript files
+{
+  "tool": "search_files",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pattern": "*.ts"
+  }
+}
+
+// Search for files containing "Controller" in the name
+{
+  "tool": "search_files",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pattern": "**/Controller*"
+  }
+}
+
+// Search within a specific directory
+{
+  "tool": "search_files",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pattern": "*.res",
+    "path": "src/components"
+  }
+}
+
+// Search on a specific branch with result limit
+{
+  "tool": "search_files",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pattern": "**/*Config*",
+    "branch": "develop",
+    "limit": 50
+  }
+}
+
+// Case-insensitive search (matches SomeComponent.res, Somefile.res, etc.)
+{
+  "tool": "search_files",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pattern": "**/someFile*"
+  }
+}
+```
+
+**Parameters:**
+- `workspace`: Project key (required)
+- `repository`: Repository slug (required)
+- `pattern`: Glob pattern to filter files (optional, returns all files if not specified)
+  - Supports standard glob syntax: `*.ts`, `**/*.java`, `**/Controller*`
+  - Case-insensitive matching
+- `path`: Subdirectory to search within (optional, defaults to root)
+- `branch`: Branch name (optional, defaults to default branch)
+- `limit`: Maximum number of matching files to return (optional, default: 100)
+
+**Response:**
+```json
+{
+  "workspace": "PROJ",
+  "repository": "my-repo",
+  "branch": "master",
+  "search_path": "/",
+  "pattern": "*.res",
+  "files": [
+    "src/App.res",
+    "src/components/Button.res",
+    "src/utils/DateUtils.res"
+  ],
+  "total_files_scanned": 5000,
+  "total_matched": 150,
+  "returned": 100,
+  "truncated": true
+}
+```
+
+This tool is particularly useful for:
+- Finding files by name pattern (like VS Code's Ctrl+P)
+- Discovering all files of a certain type in a repository
+- Locating configuration files or specific components
+- Exploring unfamiliar codebases
 
 ### Get File Content
 
@@ -1291,6 +1483,207 @@ This tool is particularly useful for:
 - Identifying repositories you have specific permissions on
 - Getting clone URLs for repositories
 - Browsing repository structure within an organization
+
+### Search Repositories
+
+Search for repositories by name or description (Bitbucket Server only):
+
+```typescript
+// Basic search
+{
+  "tool": "search_repositories",
+  "arguments": {
+    "search_query": "backend",
+    "limit": 10
+  }
+}
+
+// Search within a specific project
+{
+  "tool": "search_repositories",
+  "arguments": {
+    "search_query": "dashboard",
+    "workspace": "PROJ",
+    "limit": 25
+  }
+}
+```
+
+Returns repository search results with project association.
+
+### Decline Pull Request
+
+Decline/reject a pull request:
+
+```typescript
+{
+  "tool": "decline_pull_request",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "comment": "Closing this PR as the feature is no longer needed"  // Optional
+  }
+}
+```
+
+### Delete Comment
+
+Delete a comment from a pull request:
+
+```typescript
+{
+  "tool": "delete_comment",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "comment_id": 456
+  }
+}
+```
+
+**Note**: Comments with replies cannot be deleted. Only the comment author, PR author, or repository admin can delete comments.
+
+### PR Task Management (Bitbucket Server only)
+
+Tasks are checklist items that can be added to pull requests. They help track action items that need to be completed before merging.
+
+#### List PR Tasks
+
+```typescript
+{
+  "tool": "list_pr_tasks",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123
+  }
+}
+```
+
+Returns all tasks with their status:
+```json
+{
+  "pull_request_id": 123,
+  "tasks": [
+    {
+      "id": 456,
+      "text": "Update documentation",
+      "author": "John Doe",
+      "state": "OPEN",
+      "created_on": "2025-01-25T10:00:00Z",
+      "is_resolved": false
+    }
+  ],
+  "summary": {
+    "total": 3,
+    "open": 2,
+    "resolved": 1
+  }
+}
+```
+
+#### Create PR Task
+
+```typescript
+{
+  "tool": "create_pr_task",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "text": "Add unit tests for the new feature"
+  }
+}
+```
+
+#### Update PR Task
+
+```typescript
+{
+  "tool": "update_pr_task",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "task_id": 456,
+    "text": "Add unit tests and integration tests"
+  }
+}
+```
+
+#### Mark/Unmark Task as Done
+
+```typescript
+// Mark as done
+{
+  "tool": "mark_pr_task_done",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "task_id": 456
+  }
+}
+
+// Reopen task
+{
+  "tool": "unmark_pr_task_done",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "task_id": 456
+  }
+}
+```
+
+#### Delete PR Task
+
+```typescript
+{
+  "tool": "delete_pr_task",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "task_id": 456
+  }
+}
+```
+
+#### Convert Between Comments and Tasks
+
+```typescript
+// Convert a comment to a task
+{
+  "tool": "convert_comment_to_task",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "comment_id": 456
+  }
+}
+
+// Convert a task back to a comment
+{
+  "tool": "convert_task_to_comment",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 123,
+    "task_id": 456
+  }
+}
+```
+
+**Note on Tasks:**
+- Tasks are implemented as comments with `severity: "BLOCKER"` in Bitbucket Server
+- Tasks can be in `OPEN` or `RESOLVED` state
+- Only the task creator, PR author, or repository admin can edit text or delete tasks
+- Anyone with read access can mark tasks as done/undone
 
 ## Development
 

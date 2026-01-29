@@ -243,6 +243,25 @@ export const isListDirectoryContentArgs = (
   (args.path === undefined || typeof args.path === 'string') &&
   (args.branch === undefined || typeof args.branch === 'string');
 
+export const isSearchFilesArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  pattern?: string;
+  path?: string;
+  branch?: string;
+  limit?: number;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  (args.pattern === undefined || typeof args.pattern === 'string') &&
+  (args.path === undefined || typeof args.path === 'string') &&
+  (args.branch === undefined || typeof args.branch === 'string') &&
+  (args.limit === undefined || typeof args.limit === 'number');
+
 export const isGetFileContentArgs = (
   args: any
 ): args is {
@@ -362,3 +381,122 @@ export const isListRepositoriesArgs = (
   (args.permission === undefined || typeof args.permission === 'string') &&
   (args.limit === undefined || typeof args.limit === 'number') &&
   (args.start === undefined || typeof args.start === 'number');
+
+export const isSearchRepositoriesArgs = (
+  args: any
+): args is {
+  search_query: string;
+  workspace?: string;
+  limit?: number;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.search_query === 'string' &&
+  (args.workspace === undefined || typeof args.workspace === 'string') &&
+  (args.limit === undefined || typeof args.limit === 'number');
+
+export const isDeclinePullRequestArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  pull_request_id: number;
+  comment?: string;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.pull_request_id === 'number' &&
+  (args.comment === undefined || typeof args.comment === 'string');
+
+export const isDeleteCommentArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  pull_request_id: number;
+  comment_id: number;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.pull_request_id === 'number' &&
+  typeof args.comment_id === 'number';
+
+// PR Task type guards
+export const isListPrTasksArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  pull_request_id: number;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.pull_request_id === 'number';
+
+export const isCreatePrTaskArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  pull_request_id: number;
+  text: string;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.pull_request_id === 'number' &&
+  typeof args.text === 'string';
+
+export const isUpdatePrTaskArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  pull_request_id: number;
+  task_id: number;
+  text: string;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.pull_request_id === 'number' &&
+  typeof args.task_id === 'number' &&
+  typeof args.text === 'string';
+
+export const isTaskIdArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  pull_request_id: number;
+  task_id: number;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.pull_request_id === 'number' &&
+  typeof args.task_id === 'number';
+
+export const isConvertCommentToTaskArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  pull_request_id: number;
+  comment_id: number;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.pull_request_id === 'number' &&
+  typeof args.comment_id === 'number';
