@@ -75,6 +75,7 @@ export interface BitbucketServerPullRequest {
       displayId: string;
     };
   };
+  draft?: boolean;
 }
 
 // Bitbucket Server Activity types
@@ -185,6 +186,7 @@ export interface BitbucketCloudPullRequest {
     display_name: string;
     account_id: string;
   };
+  draft?: boolean;
 }
 
 // Bitbucket Cloud Branch types
