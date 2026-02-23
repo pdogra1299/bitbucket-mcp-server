@@ -30,7 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `handleSearchFiles` method to `FileHandlers` class
 - Uses `minimatch` with `matchBase: true` and `nocase: true` options for flexible pattern matching
 - Bitbucket Server: Single API call fetches all files recursively
-- Bitbucket Cloud: Uses `/src` endpoint with `max_depth` parameter
+  - Bitbucket Cloud: Uses `/src` endpoint with `max_depth` parameter
+
+## [1.4.1] - 2026-02-23
+
+### Fixed
+
+- **Pinned `minimatch` to `9.0.5` to avoid `9.0.6` runtime crash for `npx` consumers**
+  - Ensures registry installs do not pull the broken `9.0.6` release
 
 ## [1.3.0] - 2026-01-25
 
