@@ -498,3 +498,70 @@ export const isConvertCommentToTaskArgs = (
   typeof args.repository === 'string' &&
   typeof args.pull_request_id === 'number' &&
   typeof args.comment_id === 'number';
+
+// Merged tool type guards
+export const isSetPrApprovalArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  pull_request_id: number;
+  approved: boolean;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.pull_request_id === 'number' &&
+  typeof args.approved === 'boolean';
+
+export const isSetReviewStatusArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  pull_request_id: number;
+  request_changes: boolean;
+  comment?: string;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.pull_request_id === 'number' &&
+  typeof args.request_changes === 'boolean' &&
+  (args.comment === undefined || typeof args.comment === 'string');
+
+export const isSetPrTaskStatusArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  pull_request_id: number;
+  task_id: number;
+  done: boolean;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.pull_request_id === 'number' &&
+  typeof args.task_id === 'number' &&
+  typeof args.done === 'boolean';
+
+export const isConvertPrItemArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  pull_request_id: number;
+  id: number;
+  direction: 'to_task' | 'to_comment';
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.pull_request_id === 'number' &&
+  typeof args.id === 'number' &&
+  (args.direction === 'to_task' || args.direction === 'to_comment');

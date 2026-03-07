@@ -1,6 +1,6 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { BitbucketApiClient } from '../utils/api-client.js';
-import { formatServerResponse, formatCloudResponse, formatServerCommit, formatCloudCommit } from '../utils/formatters.js';
+import { formatServerResponse, formatCloudResponse, formatServerPRListItem, formatCloudPRListItem, formatServerCommit, formatCloudCommit } from '../utils/formatters.js';
 import { formatSuggestionComment } from '../utils/suggestion-formatter.js';
 import { DiffParser } from '../utils/diff-parser.js';
 import { 
@@ -32,7 +32,9 @@ import {
   isCreatePrTaskArgs,
   isUpdatePrTaskArgs,
   isTaskIdArgs,
-  isConvertCommentToTaskArgs
+  isConvertCommentToTaskArgs,
+  isSetPrTaskStatusArgs,
+  isConvertPrItemArgs
 } from '../types/guards.js';
 
 export class PullRequestHandlers {
@@ -221,16 +223,16 @@ export class PullRequestHandlers {
       let nextPageStart = null;
 
       if (this.apiClient.getIsServer()) {
-        pullRequests = (response.values || []).map((pr: BitbucketServerPullRequest) => 
-          formatServerResponse(pr, undefined, this.baseUrl)
+        pullRequests = (response.values || []).map((pr: BitbucketServerPullRequest) =>
+          formatServerPRListItem(pr, this.baseUrl)
         );
         totalCount = response.size || 0;
         if (!response.isLastPage && response.nextPageStart !== undefined) {
           nextPageStart = response.nextPageStart;
         }
       } else {
-        pullRequests = (response.values || []).map((pr: BitbucketCloudPullRequest) => 
-          formatCloudResponse(pr)
+        pullRequests = (response.values || []).map((pr: BitbucketCloudPullRequest) =>
+          formatCloudPRListItem(pr)
         );
         totalCount = response.size || 0;
         if (response.next) {
@@ -1542,15 +1544,15 @@ export class PullRequestHandlers {
     }
   }
 
-  async handleMarkPrTaskDone(args: any) {
-    if (!isTaskIdArgs(args)) {
+  async handleSetPrTaskStatus(args: any) {
+    if (!isSetPrTaskStatusArgs(args)) {
       throw new McpError(
         ErrorCode.InvalidParams,
-        'Invalid arguments for mark_pr_task_done'
+        'Invalid arguments for set_pr_task_status'
       );
     }
 
-    const { workspace, repository, pull_request_id, task_id } = args;
+    const { workspace, repository, pull_request_id, task_id, done } = args;
 
     try {
       if (!this.apiClient.getIsServer()) {
@@ -1560,17 +1562,15 @@ export class PullRequestHandlers {
       const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${task_id}`;
       const comment = await this.apiClient.makeRequest<any>('get', commentPath);
 
-      const requestBody = {
-        state: 'RESOLVED',
+      await this.apiClient.makeRequest<any>('put', commentPath, {
+        state: done ? 'RESOLVED' : 'OPEN',
         version: comment.version
-      };
-
-      await this.apiClient.makeRequest<any>('put', commentPath, requestBody);
+      });
 
       return {
         content: [{
           type: 'text',
-          text: `Task #${task_id} has been marked as done.`
+          text: done ? `Task #${task_id} has been marked as done.` : `Task #${task_id} has been reopened.`
         }]
       };
     } catch (error: any) {
@@ -1579,53 +1579,7 @@ export class PullRequestHandlers {
         content: [{
           type: 'text',
           text: JSON.stringify({
-            error: `Failed to mark task as done: ${errorMessage}`,
-            details: error.response?.data
-          }, null, 2)
-        }],
-        isError: true
-      };
-    }
-  }
-
-  async handleUnmarkPrTaskDone(args: any) {
-    if (!isTaskIdArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for unmark_pr_task_done'
-      );
-    }
-
-    const { workspace, repository, pull_request_id, task_id } = args;
-
-    try {
-      if (!this.apiClient.getIsServer()) {
-        throw new Error('PR tasks are currently only supported for Bitbucket Server');
-      }
-
-      const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${task_id}`;
-      const comment = await this.apiClient.makeRequest<any>('get', commentPath);
-
-      const requestBody = {
-        state: 'OPEN',
-        version: comment.version
-      };
-
-      await this.apiClient.makeRequest<any>('put', commentPath, requestBody);
-
-      return {
-        content: [{
-          type: 'text',
-          text: `Task #${task_id} has been reopened.`
-        }]
-      };
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            error: `Failed to reopen task: ${errorMessage}`,
+            error: `Failed to update task status: ${errorMessage}`,
             details: error.response?.data
           }, null, 2)
         }],
@@ -1653,35 +1607,35 @@ export class PullRequestHandlers {
     });
   }
 
-  async handleConvertCommentToTask(args: any) {
-    if (!isConvertCommentToTaskArgs(args)) {
+  async handleConvertPrItem(args: any) {
+    if (!isConvertPrItemArgs(args)) {
       throw new McpError(
         ErrorCode.InvalidParams,
-        'Invalid arguments for convert_comment_to_task'
+        'Invalid arguments for convert_pr_item'
       );
     }
 
-    const { workspace, repository, pull_request_id, comment_id } = args;
+    const { workspace, repository, pull_request_id, id, direction } = args;
 
     try {
       if (!this.apiClient.getIsServer()) {
         throw new Error('PR tasks are currently only supported for Bitbucket Server');
       }
 
-      const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${comment_id}`;
-      const comment = await this.apiClient.makeRequest<any>('get', commentPath);
+      const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${id}`;
+      const item = await this.apiClient.makeRequest<any>('get', commentPath);
 
-      const requestBody = {
-        severity: 'BLOCKER',
-        version: comment.version
-      };
-
-      await this.apiClient.makeRequest<any>('put', commentPath, requestBody);
+      await this.apiClient.makeRequest<any>('put', commentPath, {
+        severity: direction === 'to_task' ? 'BLOCKER' : 'NORMAL',
+        version: item.version
+      });
 
       return {
         content: [{
           type: 'text',
-          text: `Comment #${comment_id} has been converted to a task.`
+          text: direction === 'to_task'
+            ? `Comment #${id} has been converted to a task.`
+            : `Task #${id} has been converted to a comment.`
         }]
       };
     } catch (error: any) {
@@ -1690,53 +1644,7 @@ export class PullRequestHandlers {
         content: [{
           type: 'text',
           text: JSON.stringify({
-            error: `Failed to convert comment to task: ${errorMessage}`,
-            details: error.response?.data
-          }, null, 2)
-        }],
-        isError: true
-      };
-    }
-  }
-
-  async handleConvertTaskToComment(args: any) {
-    if (!isTaskIdArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for convert_task_to_comment'
-      );
-    }
-
-    const { workspace, repository, pull_request_id, task_id } = args;
-
-    try {
-      if (!this.apiClient.getIsServer()) {
-        throw new Error('PR tasks are currently only supported for Bitbucket Server');
-      }
-
-      const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${task_id}`;
-      const comment = await this.apiClient.makeRequest<any>('get', commentPath);
-
-      const requestBody = {
-        severity: 'NORMAL',
-        version: comment.version
-      };
-
-      await this.apiClient.makeRequest<any>('put', commentPath, requestBody);
-
-      return {
-        content: [{
-          type: 'text',
-          text: `Task #${task_id} has been converted to a comment.`
-        }]
-      };
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            error: `Failed to convert task to comment: ${errorMessage}`,
+            error: `Failed to convert item: ${errorMessage}`,
             details: error.response?.data
           }, null, 2)
         }],

@@ -54,10 +54,8 @@ export class ProjectHandlers {
         // Format projects
         projects = (response.values || []).map((project: BitbucketServerProject) => ({
           key: project.key,
-          id: project.id,
           name: project.name,
           description: project.description || '',
-          is_public: project.public,
           type: project.type,
           url: `${this.baseUrl}/projects/${project.key}`
         }));
@@ -79,10 +77,8 @@ export class ProjectHandlers {
 
         projects = (response.values || []).map((workspace: any) => ({
           key: workspace.slug,
-          id: workspace.uuid,
           name: workspace.name,
           description: '',
-          is_public: !workspace.is_private,
           type: 'WORKSPACE',
           url: workspace.links.html.href
         }));
@@ -161,18 +157,11 @@ export class ProjectHandlers {
         // Format repositories
         repositories = (response.values || []).map((repo: BitbucketServerRepository) => ({
           slug: repo.slug,
-          id: repo.id,
           name: repo.name,
           description: repo.description || '',
           project_key: repo.project.key,
           project_name: repo.project.name,
-          state: repo.state,
           is_public: repo.public,
-          is_forkable: repo.forkable,
-          clone_urls: {
-            http: repo.links.clone.find(c => c.name === 'http')?.href || '',
-            ssh: repo.links.clone.find(c => c.name === 'ssh')?.href || ''
-          },
           url: `${this.baseUrl}/projects/${repo.project.key}/repos/${repo.slug}`
         }));
 
@@ -210,18 +199,11 @@ export class ProjectHandlers {
 
         repositories = (response.values || []).map((repo: BitbucketCloudRepository) => ({
           slug: repo.slug,
-          id: repo.uuid,
           name: repo.name,
           description: repo.description || '',
           project_key: repo.project?.key || '',
           project_name: repo.project?.name || '',
-          state: 'AVAILABLE',
           is_public: !repo.is_private,
-          is_forkable: true,
-          clone_urls: {
-            http: repo.links.clone.find(c => c.name === 'https')?.href || '',
-            ssh: repo.links.clone.find(c => c.name === 'ssh')?.href || ''
-          },
           url: repo.links.html.href
         }));
 

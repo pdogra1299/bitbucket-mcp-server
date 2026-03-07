@@ -7,57 +7,68 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 
 ## Features
 
-### Currently Implemented Tools
+### Available Tools (29 total)
 
-#### Core PR Lifecycle Tools
-- `get_pull_request` - Retrieve detailed information about a pull request
-- `list_pull_requests` - List pull requests with filters (state, author, pagination)
+#### PR Core (`pr_core`)
+- `get_pull_request` - Full PR details including comments, file changes, and merge info
+- `list_pull_requests` - List PRs with filters (state, author, pagination)
 - `create_pull_request` - Create new pull requests
 - `update_pull_request` - Update PR details (title, description, reviewers, destination branch)
-- `add_comment` - Add comments to pull requests (supports replies)
 - `merge_pull_request` - Merge pull requests with various strategies
-- `list_pr_commits` - List all commits that are part of a pull request
-- `delete_branch` - Delete branches after merge
-
-#### Branch Management Tools
-- `list_branches` - List branches with filtering and pagination
-- `delete_branch` - Delete branches (with protection checks)
-- `get_branch` - Get detailed branch information including associated PRs
-- `list_branch_commits` - List commits in a branch with advanced filtering
-
-#### File and Directory Tools
-- `list_directory_content` - List files and directories in a repository path
-- `search_files` - Search for files by name or path pattern in a repository (glob patterns, case-insensitive)
-- `get_file_content` - Get file content with smart truncation for large files
-
-#### Code Review Tools
-- `get_pull_request_diff` - Get the diff/changes for a pull request
-- `approve_pull_request` - Approve a pull request
-- `unapprove_pull_request` - Remove approval from a pull request
-- `request_changes` - Request changes on a pull request
-- `remove_requested_changes` - Remove change request from a pull request
-
-#### Search Tools
-- `search_code` - Search for code across repositories (currently Bitbucket Server only)
-- `search_repositories` - Search for repositories by name or description (Bitbucket Server only)
-
-#### PR Lifecycle Management Tools
 - `decline_pull_request` - Decline/reject a pull request
+
+#### PR Comments (`pr_comments`)
+- `add_comment` - Add general, inline, threaded, or suggestion comments to a PR
 - `delete_comment` - Delete a comment from a pull request
 
-#### PR Task Tools (Bitbucket Server only)
-- `list_pr_tasks` - List all tasks (checklist items) on a pull request
+#### Code Review (`pr_review`)
+- `get_pull_request_diff` - Structured line-by-line diff with ADDED/REMOVED/CONTEXT types
+- `set_pr_approval` - Approve (`approved: true`) or unapprove (`approved: false`) a PR
+- `set_review_status` - Request changes (`request_changes: true`) or remove the request (`false`)
+
+#### PR Tasks — Bitbucket Server only (`pr_tasks`)
+- `list_pr_tasks` - List all tasks on a pull request
 - `create_pr_task` - Create a new task on a pull request
 - `update_pr_task` - Update the text of an existing task
-- `mark_pr_task_done` - Mark a task as done/resolved
-- `unmark_pr_task_done` - Reopen a resolved task
+- `set_pr_task_status` - Mark a task done (`done: true`) or reopen it (`done: false`)
 - `delete_pr_task` - Delete a task from a pull request
-- `convert_comment_to_task` - Convert an existing comment to a task
-- `convert_task_to_comment` - Convert a task back to a regular comment
+- `convert_pr_item` - Convert a comment to a task (`direction: "to_task"`) or back (`"to_comment"`)
 
-#### Project and Repository Discovery Tools
-- `list_projects` - List all accessible Bitbucket projects/workspaces with filtering
+#### Commits (`commits`)
+- `list_pr_commits` - List all commits in a pull request
+- `list_branch_commits` - List commits in a branch with date/author/message filters
+
+#### Branches (`branches`)
+- `list_branches` - List branches with filtering and pagination
+- `get_branch` - Detailed branch info including associated PRs and stats
+- `delete_branch` - Delete a branch
+
+#### Files (`files`)
+- `list_directory_content` - List files and directories in a repository path
+- `get_file_content` - Get file content with smart truncation for large files
+- `search_files` - Search for files by glob pattern (case-insensitive, like VS Code Ctrl+P)
+
+#### Search — Bitbucket Server only (`search`)
+- `search_code` - Search for code across repositories
+- `search_repositories` - Search for repositories by name or description
+
+#### Discovery (`discovery`)
+- `list_projects` - List all accessible Bitbucket projects/workspaces
 - `list_repositories` - List repositories in a project or across all accessible projects
+
+### Token Optimization
+
+v2.0.0 introduces significant token savings on every LLM request:
+
+| Configuration | Tools exposed | Est. tokens |
+|---|---|---|
+| Bitbucket Server (all groups) | 29 | ~5,100 |
+| Bitbucket Cloud (auto-filtered) | 21 | ~3,900 |
+| Custom group preset (e.g. `pr_core,pr_review,files`) | 12 | ~2,100 |
+
+**Bitbucket Cloud** automatically hides the 10 server-only tools with no configuration needed.
+
+**`BITBUCKET_TOOL_GROUPS`** lets you expose only the groups relevant to your workflow — see [Tool Group Filtering](#tool-group-filtering) below.
 
 ## Installation
 
@@ -184,6 +195,49 @@ For Bitbucket Server, use:
 **Important for Bitbucket Server users:**
 - Use your full email address as the username (e.g., "john.doe@company.com")
 - This is required for approval/review actions to work correctly
+
+## Tool Group Filtering
+
+Reduce the number of tools sent to the LLM on every request by setting `BITBUCKET_TOOL_GROUPS` to a comma-separated list of group names. Only tools in the listed groups will be exposed.
+
+### Available groups
+
+| Group | Tools | Platform |
+|---|---|---|
+| `pr_core` | `get_pull_request`, `list_pull_requests`, `create_pull_request`, `update_pull_request`, `merge_pull_request`, `decline_pull_request` | Both |
+| `pr_comments` | `add_comment`, `delete_comment` | Both |
+| `pr_review` | `get_pull_request_diff`, `set_pr_approval`, `set_review_status` | Both |
+| `pr_tasks` | `list_pr_tasks`, `create_pr_task`, `update_pr_task`, `set_pr_task_status`, `delete_pr_task`, `convert_pr_item` | Server only |
+| `commits` | `list_pr_commits`, `list_branch_commits` | Both |
+| `branches` | `list_branches`, `get_branch`, `delete_branch` | Both |
+| `files` | `list_directory_content`, `get_file_content`, `search_files` | Both |
+| `search` | `search_code`, `search_repositories` | Server only |
+| `discovery` | `list_projects`, `list_repositories` | Both |
+
+### Example presets
+
+**PR review workflow** (~2,100 tokens):
+```json
+"env": {
+  "BITBUCKET_TOOL_GROUPS": "pr_core,pr_review,files"
+}
+```
+
+**Full PR management** (~3,500 tokens):
+```json
+"env": {
+  "BITBUCKET_TOOL_GROUPS": "pr_core,pr_comments,pr_review,pr_tasks"
+}
+```
+
+**Code exploration only** (~1,400 tokens):
+```json
+"env": {
+  "BITBUCKET_TOOL_GROUPS": "files,search,discovery"
+}
+```
+
+When `BITBUCKET_TOOL_GROUPS` is not set, all applicable tools are exposed (default behaviour). Bitbucket Cloud users always have server-only tools automatically hidden regardless of this setting.
 
 ## Usage
 

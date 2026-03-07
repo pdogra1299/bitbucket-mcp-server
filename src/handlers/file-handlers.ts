@@ -98,6 +98,9 @@ export class FileHandlers {
         actualBranch = branch || response.commit?.branch || 'main';
       }
 
+      // Strip size from each item — not useful for navigation
+      const strippedContents = contents.map(({ size: _size, ...rest }: any) => rest);
+
       return {
         content: [
           {
@@ -105,8 +108,8 @@ export class FileHandlers {
             text: JSON.stringify({
               path: dirPath || '/',
               branch: actualBranch,
-              contents,
-              total_items: contents.length
+              contents: strippedContents,
+              total_items: strippedContents.length
             }, null, 2),
           },
         ],
@@ -293,8 +296,6 @@ export class FileHandlers {
       const response: any = {
         file_path,
         branch: branch || (this.apiClient.getIsServer() ? 'default' : 'main'),
-        size: fileMetadata.size || fileContent.length,
-        encoding: fileMetadata.encoding || 'utf-8',
         content: processedContent
       };
 
@@ -434,13 +435,10 @@ export class FileHandlers {
 
       // Build response
       const response = {
-        workspace,
-        repository,
         branch: branch || 'default',
         search_path: searchPath || '/',
         pattern: pattern || '*',
         files: resultFiles,
-        total_files_scanned: allFiles.length,
         total_matched: totalMatched,
         returned: resultFiles.length,
         truncated

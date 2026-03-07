@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-03-07
+
+### BREAKING CHANGES
+
+- **Merged 8 inverse-operation tool pairs into 4 unified tools** — any client or LLM prompt referencing the old tool names must be updated:
+
+  | Removed (old) | Replacement |
+  |---|---|
+  | `approve_pull_request` | `set_pr_approval` with `approved: true` |
+  | `unapprove_pull_request` | `set_pr_approval` with `approved: false` |
+  | `request_changes` | `set_review_status` with `request_changes: true` |
+  | `remove_requested_changes` | `set_review_status` with `request_changes: false` |
+  | `mark_pr_task_done` | `set_pr_task_status` with `done: true` |
+  | `unmark_pr_task_done` | `set_pr_task_status` with `done: false` |
+  | `convert_comment_to_task` | `convert_pr_item` with `direction: "to_task"` |
+  | `convert_task_to_comment` | `convert_pr_item` with `direction: "to_comment"` |
+
+- **Removed fields from `list_pull_requests` response** — slim list format no longer includes `is_open`, `is_closed`, `api_url`, `description`. Use `get_pull_request` for full details.
+
+- **Removed fields from `list_projects` / `list_repositories` responses** — `id`, `state`, `is_forkable`, `clone_urls` removed (not useful for LLM navigation).
+
+- **Removed fields from commit responses** — `author.email` and `parents[]` removed from `FormattedCommit`. Use `is_merge_commit` boolean (retained) instead of checking `parents.length`.
+
+- **Removed fields from file/directory responses** — `size` removed from `list_directory_content` entries; `size` and `encoding` removed from `get_file_content`; `workspace`, `repository`, `total_files_scanned` removed from `search_files`.
+
+- **Removed fields from diff response** — `message`, `from_hash`, `to_hash` removed from `get_pull_request_diff` structured response.
+
+### Added
+
+- **Tool group filtering via `BITBUCKET_TOOL_GROUPS` environment variable**:
+  - Set a comma-separated list of group names to expose only the tools your use case needs
+  - Groups: `pr_core`, `pr_comments`, `pr_review`, `pr_tasks`, `commits`, `branches`, `files`, `search`, `discovery`
+  - Example: `BITBUCKET_TOOL_GROUPS=pr_core,pr_review,files` exposes only 12 tools (~2,100 tokens) instead of all 29
+  - When unset, all applicable tools are exposed (default behaviour)
+
+- **Automatic server-only tool filtering for Bitbucket Cloud**:
+  - When connected to Bitbucket Cloud, 10 server-only tools are automatically hidden from the LLM
+  - Cloud users see 21 tools instead of 29, saving ~1,100 tokens per request without any configuration
+  - Server-only tools: `list_pr_tasks`, `create_pr_task`, `update_pr_task`, `set_pr_task_status`, `delete_pr_task`, `convert_pr_item`, `list_branch_commits`, `search_code`, `search_repositories`, and `search_files`
+
+- **Tool group metadata** on every tool definition (`group` + `availability` fields) for runtime filtering
+
+### Changed
+
+- **Token usage reduced by ~25% (Server) to ~43% (Cloud)** in tool definition payload sent to LLM on every request:
+  - Before: 33 tools, ~6,800 tokens
+  - After (Server, all groups): 29 tools, ~5,100 tokens
+  - After (Cloud, auto-filtered): 21 tools, ~3,900 tokens
+  - After (minimal group preset): 12 tools, ~2,100 tokens
+
+- **Shared parameter constants** (`W`, `R`, `PRID`, `BRANCH`, `LIMIT`, `START`, `TASK_ID`) used across all tool definitions to avoid repeating identical parameter descriptions
+
+- **Compressed tool descriptions** — all tool and parameter descriptions trimmed to remove redundant wording while preserving full semantic meaning
+
+- **Author filter in `list_branch_commits`** now matches by `author.name` only (email was removed from `FormattedCommit`)
+
 ## [1.4.0] - 2026-01-28
 
 ### Added

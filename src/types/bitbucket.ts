@@ -437,10 +437,8 @@ export interface FormattedCommit {
   message: string;
   author: {
     name: string;
-    email: string;
   };
   date: string;
-  parents: string[];
   is_merge_commit: boolean;
   build_status?: BuildStatus;
 }

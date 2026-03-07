@@ -455,11 +455,9 @@ export class BranchHandlers {
         
         // Apply client-side filters for Server API
         if (author) {
-          // Filter by author email or name
-          commits = commits.filter(c => 
-            c.author.email === author || 
+          // Filter by author name
+          commits = commits.filter(c =>
             c.author.name === author ||
-            c.author.email.toLowerCase() === author.toLowerCase() ||
             c.author.name.toLowerCase() === author.toLowerCase()
           );
         }

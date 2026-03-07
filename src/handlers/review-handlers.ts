@@ -2,8 +2,8 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { BitbucketApiClient } from '../utils/api-client.js';
 import {
   isGetPullRequestDiffArgs,
-  isApprovePullRequestArgs,
-  isRequestChangesArgs
+  isSetPrApprovalArgs,
+  isSetReviewStatusArgs
 } from '../types/guards.js';
 import { DiffParser } from '../utils/diff-parser.js';
 import { minimatch } from 'minimatch';
@@ -33,10 +33,7 @@ interface DiffFile {
 }
 
 interface StructuredDiffResponse {
-  message: string;
   pull_request_id: number;
-  from_hash: string;
-  to_hash: string;
   files: DiffFile[];
   summary: {
     total_files: number;
@@ -168,10 +165,7 @@ export class ReviewHandlers {
     });
 
     const result: StructuredDiffResponse = {
-      message: 'Pull request diff retrieved successfully',
       pull_request_id: pullRequestId,
-      from_hash: response.fromHash || '',
-      to_hash: response.toHash || '',
       files,
       summary: {
         total_files: allDiffs.length,
@@ -273,7 +267,6 @@ export class ReviewHandlers {
               {
                 type: 'text',
                 text: JSON.stringify({
-                  message: 'Pull request diff retrieved successfully',
                   pull_request_id,
                   diff: rawDiff
                 }, null, 2),
@@ -297,7 +290,6 @@ export class ReviewHandlers {
 
         // Build response with filtering metadata
         const response: any = {
-          message: 'Pull request diff retrieved successfully',
           pull_request_id,
           diff: filteredDiff
         };
@@ -340,179 +332,83 @@ export class ReviewHandlers {
     }
   }
 
-  async handleApprovePullRequest(args: any) {
-    if (!isApprovePullRequestArgs(args)) {
+  async handleSetPrApproval(args: any) {
+    if (!isSetPrApprovalArgs(args)) {
       throw new McpError(
         ErrorCode.InvalidParams,
-        'Invalid arguments for approve_pull_request'
+        'Invalid arguments for set_pr_approval'
       );
     }
 
-    const { workspace, repository, pull_request_id } = args;
+    const { workspace, repository, pull_request_id, approved } = args;
 
     try {
-      let apiPath: string;
+      const username = this.username.replace(/[@+]/g, '_');
 
       if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API - use participants endpoint
-        // Convert email format: @ and + to _ for the API slug format
-        const username = this.username.replace(/[@+]/g, '_');
-        apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/participants/${username}`;
-        await this.apiClient.makeRequest<any>('put', apiPath, { status: 'APPROVED' });
-      } else {
-        // Bitbucket Cloud API
-        apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/approve`;
-        await this.apiClient.makeRequest<any>('post', apiPath);
-      }
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              message: 'Pull request approved successfully',
-              pull_request_id,
-              approved_by: this.username
-            }, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      return this.apiClient.handleApiError(error, `approving pull request ${pull_request_id} in ${workspace}/${repository}`);
-    }
-  }
-
-  async handleUnapprovePullRequest(args: any) {
-    if (!isApprovePullRequestArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for unapprove_pull_request'
-      );
-    }
-
-    const { workspace, repository, pull_request_id } = args;
-
-    try {
-      let apiPath: string;
-
-      if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API - use participants endpoint
-        const username = this.username.replace(/[@+]/g, '_');
-        apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/participants/${username}`;
-        await this.apiClient.makeRequest<any>('put', apiPath, { status: 'UNAPPROVED' });
-      } else {
-        // Bitbucket Cloud API
-        apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/approve`;
-        await this.apiClient.makeRequest<any>('delete', apiPath);
-      }
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              message: 'Pull request approval removed successfully',
-              pull_request_id,
-              unapproved_by: this.username
-            }, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      return this.apiClient.handleApiError(error, `removing approval from pull request ${pull_request_id} in ${workspace}/${repository}`);
-    }
-  }
-
-  async handleRequestChanges(args: any) {
-    if (!isRequestChangesArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for request_changes'
-      );
-    }
-
-    const { workspace, repository, pull_request_id, comment } = args;
-
-    try {
-      if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API - use needs-work status
-        const username = this.username.replace(/[@+]/g, '_');
         const apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/participants/${username}`;
-        await this.apiClient.makeRequest<any>('put', apiPath, { status: 'NEEDS_WORK' });
-        
-        // Add comment if provided
+        await this.apiClient.makeRequest<any>('put', apiPath, { status: approved ? 'APPROVED' : 'UNAPPROVED' });
+      } else {
+        const apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/approve`;
+        await this.apiClient.makeRequest<any>(approved ? 'post' : 'delete', apiPath);
+      }
+
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            message: approved ? 'Pull request approved' : 'Pull request approval removed',
+            pull_request_id,
+            by: this.username
+          }, null, 2),
+        }],
+      };
+    } catch (error) {
+      return this.apiClient.handleApiError(error, `setting approval on pull request ${pull_request_id} in ${workspace}/${repository}`);
+    }
+  }
+
+  async handleSetReviewStatus(args: any) {
+    if (!isSetReviewStatusArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for set_review_status'
+      );
+    }
+
+    const { workspace, repository, pull_request_id, request_changes, comment } = args;
+
+    try {
+      const username = this.username.replace(/[@+]/g, '_');
+
+      if (this.apiClient.getIsServer()) {
+        const apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/participants/${username}`;
+        await this.apiClient.makeRequest<any>('put', apiPath, { status: request_changes ? 'NEEDS_WORK' : 'UNAPPROVED' });
         if (comment) {
           const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments`;
           await this.apiClient.makeRequest<any>('post', commentPath, { text: comment });
         }
       } else {
-        // Bitbucket Cloud API - use request-changes status
         const apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/request-changes`;
-        await this.apiClient.makeRequest<any>('post', apiPath);
-        
-        // Add comment if provided
-        if (comment) {
+        await this.apiClient.makeRequest<any>(request_changes ? 'post' : 'delete', apiPath);
+        if (comment && request_changes) {
           const commentPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/comments`;
-          await this.apiClient.makeRequest<any>('post', commentPath, {
-            content: { raw: comment }
-          });
+          await this.apiClient.makeRequest<any>('post', commentPath, { content: { raw: comment } });
         }
       }
 
       return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              message: 'Changes requested on pull request',
-              pull_request_id,
-              requested_by: this.username,
-              comment: comment || 'No comment provided'
-            }, null, 2),
-          },
-        ],
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            message: request_changes ? 'Changes requested on pull request' : 'Change request removed',
+            pull_request_id,
+            by: this.username
+          }, null, 2),
+        }],
       };
     } catch (error) {
-      return this.apiClient.handleApiError(error, `requesting changes on pull request ${pull_request_id} in ${workspace}/${repository}`);
-    }
-  }
-
-  async handleRemoveRequestedChanges(args: any) {
-    if (!isApprovePullRequestArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for remove_requested_changes'
-      );
-    }
-
-    const { workspace, repository, pull_request_id } = args;
-
-    try {
-      if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API - remove needs-work status
-        const username = this.username.replace(/[@+]/g, '_');
-        const apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/participants/${username}`;
-        await this.apiClient.makeRequest<any>('put', apiPath, { status: 'UNAPPROVED' });
-      } else {
-        // Bitbucket Cloud API
-        const apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/request-changes`;
-        await this.apiClient.makeRequest<any>('delete', apiPath);
-      }
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              message: 'Change request removed from pull request',
-              pull_request_id,
-              removed_by: this.username
-            }, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      return this.apiClient.handleApiError(error, `removing change request from pull request ${pull_request_id} in ${workspace}/${repository}`);
+      return this.apiClient.handleApiError(error, `setting review status on pull request ${pull_request_id} in ${workspace}/${repository}`);
     }
   }
 }

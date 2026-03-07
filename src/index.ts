@@ -15,13 +15,18 @@ import { ReviewHandlers } from './handlers/review-handlers.js';
 import { FileHandlers } from './handlers/file-handlers.js';
 import { SearchHandlers } from './handlers/search-handlers.js';
 import { ProjectHandlers } from './handlers/project-handlers.js';
-import { toolDefinitions } from './tools/definitions.js';
+import { toolDefinitions, ToolGroup } from './tools/definitions.js';
 
 // Get environment variables
 const BITBUCKET_USERNAME = process.env.BITBUCKET_USERNAME;
 const BITBUCKET_APP_PASSWORD = process.env.BITBUCKET_APP_PASSWORD;
 const BITBUCKET_TOKEN = process.env.BITBUCKET_TOKEN; // For Bitbucket Server
 const BITBUCKET_BASE_URL = process.env.BITBUCKET_BASE_URL || 'https://api.bitbucket.org/2.0';
+
+// Optional: comma-separated list of tool groups to expose (e.g. "pr_core,pr_review,files")
+const BITBUCKET_TOOL_GROUPS = process.env.BITBUCKET_TOOL_GROUPS
+  ? new Set<ToolGroup>(process.env.BITBUCKET_TOOL_GROUPS.split(',').map(g => g.trim()) as ToolGroup[])
+  : null;
 
 // Check for either app password (Cloud) or token (Server)
 if (!BITBUCKET_USERNAME || (!BITBUCKET_APP_PASSWORD && !BITBUCKET_TOKEN)) {
@@ -44,7 +49,7 @@ class BitbucketMCPServer {
     this.server = new Server(
       {
         name: 'bitbucket-mcp-server',
-        version: '1.4.1',
+        version: '2.0.0',
       },
       {
         capabilities: {
@@ -84,10 +89,21 @@ class BitbucketMCPServer {
   }
 
   private setupToolHandlers() {
-    // List available tools
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: toolDefinitions,
-    }));
+    // List available tools — filter by platform and enabled groups
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+      const isServer = this.apiClient.getIsServer();
+      const tools = toolDefinitions.filter(tool => {
+        // Hide server-only tools when running against Bitbucket Cloud
+        if (tool.availability === 'server_only' && !isServer) return false;
+        // Hide tools not in the enabled groups when BITBUCKET_TOOL_GROUPS is set
+        if (BITBUCKET_TOOL_GROUPS && !BITBUCKET_TOOL_GROUPS.has(tool.group)) return false;
+        return true;
+      });
+      // Strip internal metadata before sending to MCP client
+      return {
+        tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+      };
+    });
 
     // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -119,16 +135,12 @@ class BitbucketMCPServer {
           return this.pullRequestHandlers.handleCreatePrTask(request.params.arguments);
         case 'update_pr_task':
           return this.pullRequestHandlers.handleUpdatePrTask(request.params.arguments);
-        case 'mark_pr_task_done':
-          return this.pullRequestHandlers.handleMarkPrTaskDone(request.params.arguments);
-        case 'unmark_pr_task_done':
-          return this.pullRequestHandlers.handleUnmarkPrTaskDone(request.params.arguments);
+        case 'set_pr_task_status':
+          return this.pullRequestHandlers.handleSetPrTaskStatus(request.params.arguments);
         case 'delete_pr_task':
           return this.pullRequestHandlers.handleDeletePrTask(request.params.arguments);
-        case 'convert_comment_to_task':
-          return this.pullRequestHandlers.handleConvertCommentToTask(request.params.arguments);
-        case 'convert_task_to_comment':
-          return this.pullRequestHandlers.handleConvertTaskToComment(request.params.arguments);
+        case 'convert_pr_item':
+          return this.pullRequestHandlers.handleConvertPrItem(request.params.arguments);
 
         // Branch tools
         case 'list_branches':
@@ -143,14 +155,10 @@ class BitbucketMCPServer {
         // Code Review tools
         case 'get_pull_request_diff':
           return this.reviewHandlers.handleGetPullRequestDiff(request.params.arguments);
-        case 'approve_pull_request':
-          return this.reviewHandlers.handleApprovePullRequest(request.params.arguments);
-        case 'unapprove_pull_request':
-          return this.reviewHandlers.handleUnapprovePullRequest(request.params.arguments);
-        case 'request_changes':
-          return this.reviewHandlers.handleRequestChanges(request.params.arguments);
-        case 'remove_requested_changes':
-          return this.reviewHandlers.handleRemoveRequestedChanges(request.params.arguments);
+        case 'set_pr_approval':
+          return this.reviewHandlers.handleSetPrApproval(request.params.arguments);
+        case 'set_review_status':
+          return this.reviewHandlers.handleSetReviewStatus(request.params.arguments);
         
         // File tools
         case 'list_directory_content':

@@ -1,57 +1,65 @@
-export const toolDefinitions = [
+export type ToolGroup =
+  | 'pr_core'
+  | 'pr_comments'
+  | 'pr_review'
+  | 'pr_tasks'
+  | 'commits'
+  | 'branches'
+  | 'files'
+  | 'search'
+  | 'discovery';
+
+export type ToolAvailability = 'both' | 'server_only';
+
+export interface ToolDefinition {
+  name: string;
+  description: string;
+  inputSchema: object;
+  group: ToolGroup;
+  availability: ToolAvailability;
+}
+
+// Shared parameter definitions — reused across tools to avoid repetition
+const W = { type: 'string', description: 'Project key (e.g., PROJ)' };
+const R = { type: 'string', description: 'Repository slug (e.g., my-repo)' };
+const PRID = { type: 'number', description: 'Pull request ID' };
+const TASK_ID = { type: 'number', description: 'Task ID' };
+const LIMIT = { type: 'number', description: 'Max results to return (default: 25)' };
+const START = { type: 'number', description: 'Pagination start index (default: 0)' };
+const BRANCH = { type: 'string', description: 'Branch name (default: default branch)' };
+
+export const toolDefinitions: ToolDefinition[] = [
+
+  // ── PR_CORE ────────────────────────────────────────────────────────────────
   {
     name: 'get_pull_request',
-    description: 'Get details of a Bitbucket pull request including merge commit information',
+    description: 'Get full details of a pull request including active comments, file changes, reviewer status, and merge commit information',
+    group: 'pr_core',
+    availability: 'both',
     inputSchema: {
       type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-      },
+      properties: { workspace: W, repository: R, pull_request_id: PRID },
       required: ['workspace', 'repository', 'pull_request_id'],
     },
   },
   {
     name: 'list_pull_requests',
     description: 'List pull requests for a repository with optional filters',
+    group: 'pr_core',
+    availability: 'both',
     inputSchema: {
       type: 'object',
       properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
+        workspace: W,
+        repository: R,
         state: {
           type: 'string',
-          description: 'Filter by PR state: OPEN, MERGED, DECLINED, ALL (default: OPEN)',
+          description: 'Filter by state: OPEN, MERGED, DECLINED, ALL (default: OPEN)',
           enum: ['OPEN', 'MERGED', 'DECLINED', 'ALL'],
         },
-        author: {
-          type: 'string',
-          description: 'Filter by author username',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of PRs to return (default: 25)',
-        },
-        start: {
-          type: 'number',
-          description: 'Start index for pagination (default: 0)',
-        },
+        author: { type: 'string', description: 'Filter by author username (optional)' },
+        limit: LIMIT,
+        start: START,
       },
       required: ['workspace', 'repository'],
     },
@@ -59,41 +67,25 @@ export const toolDefinitions = [
   {
     name: 'create_pull_request',
     description: 'Create a new pull request',
+    group: 'pr_core',
+    availability: 'both',
     inputSchema: {
       type: 'object',
       properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        title: {
-          type: 'string',
-          description: 'Title of the pull request',
-        },
-        source_branch: {
-          type: 'string',
-          description: 'Source branch name',
-        },
-        destination_branch: {
-          type: 'string',
-          description: 'Destination branch name (e.g., "main", "master")',
-        },
-        description: {
-          type: 'string',
-          description: 'Description of the pull request (optional)',
-        },
+        workspace: W,
+        repository: R,
+        title: { type: 'string', description: 'Pull request title' },
+        source_branch: { type: 'string', description: 'Source branch name' },
+        destination_branch: { type: 'string', description: 'Destination branch (e.g., main)' },
+        description: { type: 'string', description: 'Pull request description (optional)' },
         reviewers: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Array of reviewer usernames/emails (optional)',
+          description: 'Reviewer usernames (optional)',
         },
         close_source_branch: {
           type: 'boolean',
-          description: 'Whether to close source branch after merge (optional, default: false)',
+          description: 'Close source branch after merge (optional, default: false)',
         },
       },
       required: ['workspace', 'repository', 'title', 'source_branch', 'destination_branch'],
@@ -101,150 +93,45 @@ export const toolDefinitions = [
   },
   {
     name: 'update_pull_request',
-    description: 'Update an existing pull request. When updating without specifying reviewers, existing reviewers and their approval status will be preserved.',
+    description: 'Update an existing pull request. Existing reviewers and their approval status are preserved when not explicitly updating the reviewer list.',
+    group: 'pr_core',
+    availability: 'both',
     inputSchema: {
       type: 'object',
       properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-        title: {
-          type: 'string',
-          description: 'New title (optional)',
-        },
-        description: {
-          type: 'string',
-          description: 'New description (optional)',
-        },
-        destination_branch: {
-          type: 'string',
-          description: 'New destination branch (optional)',
-        },
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
+        title: { type: 'string', description: 'New title (optional)' },
+        description: { type: 'string', description: 'New description (optional)' },
+        destination_branch: { type: 'string', description: 'New destination branch (optional)' },
         reviewers: {
           type: 'array',
           items: { type: 'string' },
-          description: 'New list of reviewer usernames/emails. If provided, replaces the reviewer list (preserving approval status for existing reviewers). If omitted, existing reviewers are preserved. (optional)',
+          description: 'New reviewer list. Replaces existing reviewers but preserves approval status. Omit to keep existing reviewers (optional)',
         },
       },
       required: ['workspace', 'repository', 'pull_request_id'],
     },
   },
   {
-    name: 'add_comment',
-    description: 'Add a comment to a pull request. Supports: 1) General PR comments, 2) Replies to existing comments, 3) Inline comments on specific code lines (using line_number OR code_snippet), 4) Code suggestions for single or multi-line replacements. For inline comments, you can either provide exact line_number or use code_snippet to auto-detect the line.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-        comment_text: {
-          type: 'string',
-          description: 'The main comment text. For suggestions, this is the explanation before the code suggestion.',
-        },
-        parent_comment_id: {
-          type: 'number',
-          description: 'ID of comment to reply to. Use this to create threaded conversations (optional)',
-        },
-        file_path: {
-          type: 'string',
-          description: 'File path for inline comment. Required for inline comments. Example: "src/components/Button.js" (optional)',
-        },
-        line_number: {
-          type: 'number',
-          description: 'Exact line number in the file. Use this OR code_snippet, not both. Required with file_path unless using code_snippet (optional)',
-        },
-        line_type: {
-          type: 'string',
-          description: 'Type of line: ADDED (green/new lines), REMOVED (red/deleted lines), or CONTEXT (unchanged lines). Default: CONTEXT',
-          enum: ['ADDED', 'REMOVED', 'CONTEXT'],
-        },
-        suggestion: {
-          type: 'string',
-          description: 'Replacement code for a suggestion. Creates a suggestion block that can be applied in Bitbucket UI. Requires file_path and line_number. For multi-line, include newlines in the string (optional)',
-        },
-        suggestion_end_line: {
-          type: 'number',
-          description: 'For multi-line suggestions: the last line number to replace. If not provided, only replaces the single line at line_number (optional)',
-        },
-        code_snippet: {
-          type: 'string',
-          description: 'Exact code text from the diff to find and comment on. Use this instead of line_number for auto-detection. Must match exactly including whitespace (optional)',
-        },
-        search_context: {
-          type: 'object',
-          properties: {
-            before: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Array of code lines that appear BEFORE the target line. Helps disambiguate when code_snippet appears multiple times',
-            },
-            after: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'Array of code lines that appear AFTER the target line. Helps disambiguate when code_snippet appears multiple times',
-            },
-          },
-          description: 'Additional context lines to help locate the exact position when using code_snippet. Useful when the same code appears multiple times (optional)',
-        },
-        match_strategy: {
-          type: 'string',
-          enum: ['strict', 'best'],
-          description: 'How to handle multiple matches when using code_snippet. "strict": fail with detailed error showing all matches. "best": automatically pick the highest confidence match. Default: "strict"',
-        },
-      },
-      required: ['workspace', 'repository', 'pull_request_id', 'comment_text'],
-    },
-  },
-  {
     name: 'merge_pull_request',
     description: 'Merge a pull request',
+    group: 'pr_core',
+    availability: 'both',
     inputSchema: {
       type: 'object',
       properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
         merge_strategy: {
           type: 'string',
-          description: 'Merge strategy: merge-commit, squash, fast-forward (optional)',
+          description: 'Merge strategy (optional)',
           enum: ['merge-commit', 'squash', 'fast-forward'],
         },
-        close_source_branch: {
-          type: 'boolean',
-          description: 'Whether to close source branch after merge (optional)',
-        },
-        commit_message: {
-          type: 'string',
-          description: 'Custom merge commit message (optional)',
-        },
+        close_source_branch: { type: 'boolean', description: 'Close source branch after merge (optional)' },
+        commit_message: { type: 'string', description: 'Custom merge commit message (optional)' },
       },
       required: ['workspace', 'repository', 'pull_request_id'],
     },
@@ -252,622 +139,164 @@ export const toolDefinitions = [
   {
     name: 'decline_pull_request',
     description: 'Decline/reject a pull request',
+    group: 'pr_core',
+    availability: 'both',
     inputSchema: {
       type: 'object',
       properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-        comment: {
-          type: 'string',
-          description: 'Optional comment explaining why the PR is being declined',
-        },
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
+        comment: { type: 'string', description: 'Reason for declining (optional)' },
       },
       required: ['workspace', 'repository', 'pull_request_id'],
+    },
+  },
+
+  // ── PR_COMMENTS ───────────────────────────────────────────────────────────
+  {
+    name: 'add_comment',
+    description: 'Add a comment to a pull request. Supports general comments, threaded replies, inline comments on specific lines, and code suggestions. Use file_path + line_number for inline comments, or code_snippet to auto-detect the line.',
+    group: 'pr_comments',
+    availability: 'both',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
+        comment_text: { type: 'string', description: 'Comment text. For suggestions, this is the explanation before the code block.' },
+        parent_comment_id: { type: 'number', description: 'Comment ID to reply to (optional)' },
+        file_path: { type: 'string', description: 'File path for inline comment, e.g. "src/index.ts" (optional)' },
+        line_number: { type: 'number', description: 'Line number in the file. Use with file_path. Provide this OR code_snippet (optional)' },
+        line_type: {
+          type: 'string',
+          description: 'Line type: ADDED (green), REMOVED (red), CONTEXT (unchanged). Default: CONTEXT',
+          enum: ['ADDED', 'REMOVED', 'CONTEXT'],
+        },
+        suggestion: { type: 'string', description: 'Replacement code for a suggestion block. Requires file_path and line_number (optional)' },
+        suggestion_end_line: { type: 'number', description: 'Last line to replace for multi-line suggestions (optional)' },
+        code_snippet: { type: 'string', description: 'Exact code text from the diff to auto-detect line number. Must match exactly including whitespace (optional)' },
+        search_context: {
+          type: 'object',
+          properties: {
+            before: { type: 'array', items: { type: 'string' }, description: 'Lines before the target to disambiguate' },
+            after: { type: 'array', items: { type: 'string' }, description: 'Lines after the target to disambiguate' },
+          },
+          description: 'Context lines to disambiguate when code_snippet appears multiple times (optional)',
+        },
+        match_strategy: {
+          type: 'string',
+          enum: ['strict', 'best'],
+          description: 'How to handle multiple code_snippet matches. "strict": error with all matches. "best": auto-pick highest confidence. Default: strict',
+        },
+      },
+      required: ['workspace', 'repository', 'pull_request_id', 'comment_text'],
     },
   },
   {
     name: 'delete_comment',
-    description: 'Delete a comment from a pull request. Note: Comments with replies cannot be deleted.',
+    description: 'Delete a comment from a pull request. Comments with replies cannot be deleted.',
+    group: 'pr_comments',
+    availability: 'both',
     inputSchema: {
       type: 'object',
       properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-        comment_id: {
-          type: 'number',
-          description: 'Comment ID to delete',
-        },
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
+        comment_id: { type: 'number', description: 'Comment ID to delete' },
       },
       required: ['workspace', 'repository', 'pull_request_id', 'comment_id'],
     },
   },
-  {
-    name: 'list_branches',
-    description: 'List branches in a repository',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        filter: {
-          type: 'string',
-          description: 'Filter branches by name pattern (optional)',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of branches to return (default: 25)',
-        },
-        start: {
-          type: 'number',
-          description: 'Start index for pagination (default: 0)',
-        },
-      },
-      required: ['workspace', 'repository'],
-    },
-  },
-  {
-    name: 'delete_branch',
-    description: 'Delete a branch',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        branch_name: {
-          type: 'string',
-          description: 'Branch name to delete',
-        },
-        force: {
-          type: 'boolean',
-          description: 'Force delete even if branch is not merged (optional, default: false)',
-        },
-      },
-      required: ['workspace', 'repository', 'branch_name'],
-    },
-  },
+
+  // ── PR_REVIEW ─────────────────────────────────────────────────────────────
   {
     name: 'get_pull_request_diff',
-    description: 'Get the diff/changes for a pull request with structured line-by-line information. Returns files with hunks containing individual lines, each with source_line (line number in old file), destination_line (line number in new file), type (ADDED/REMOVED/CONTEXT), and content. For adding inline comments: use destination_line with line_type ADDED or CONTEXT, use source_line with line_type REMOVED.',
+    description: 'Get the diff for a pull request with structured line-by-line information. Each line has source_line, destination_line, type (ADDED/REMOVED/CONTEXT), and content. For inline comments: use destination_line + ADDED/CONTEXT, or source_line + REMOVED.',
+    group: 'pr_review',
+    availability: 'both',
     inputSchema: {
       type: 'object',
       properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-        context_lines: {
-          type: 'number',
-          description: 'Number of context lines around changes (optional, default: 3)',
-        },
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
+        context_lines: { type: 'number', description: 'Context lines around changes (default: 3)' },
         include_patterns: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Array of glob patterns to include (e.g., ["*.res", "src/**/*.js"]) (optional)',
+          description: 'Glob patterns to include, e.g. ["*.ts", "src/**/*.js"] (optional)',
         },
         exclude_patterns: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Array of glob patterns to exclude (e.g., ["*.lock", "*.svg"]) (optional)',
+          description: 'Glob patterns to exclude, e.g. ["*.lock", "*.svg"] (optional)',
         },
-        file_path: {
-          type: 'string',
-          description: 'Specific file path to get diff for (e.g., "src/index.ts") (optional)',
-        },
+        file_path: { type: 'string', description: 'Get diff for a specific file only, e.g. "src/index.ts" (optional)' },
       },
       required: ['workspace', 'repository', 'pull_request_id'],
     },
   },
   {
-    name: 'approve_pull_request',
-    description: 'Approve a pull request',
+    name: 'set_pr_approval',
+    description: 'Approve or remove approval from a pull request',
+    group: 'pr_review',
+    availability: 'both',
     inputSchema: {
       type: 'object',
       properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
+        approved: { type: 'boolean', description: 'true to approve, false to remove approval' },
       },
-      required: ['workspace', 'repository', 'pull_request_id'],
+      required: ['workspace', 'repository', 'pull_request_id', 'approved'],
     },
   },
   {
-    name: 'unapprove_pull_request',
-    description: 'Remove approval from a pull request',
+    name: 'set_review_status',
+    description: 'Request changes on or remove a change request from a pull request',
+    group: 'pr_review',
+    availability: 'both',
     inputSchema: {
       type: 'object',
       properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
+        request_changes: { type: 'boolean', description: 'true to request changes, false to remove change request' },
+        comment: { type: 'string', description: 'Explanation for the review status (optional)' },
       },
-      required: ['workspace', 'repository', 'pull_request_id'],
+      required: ['workspace', 'repository', 'pull_request_id', 'request_changes'],
     },
   },
-  {
-    name: 'request_changes',
-    description: 'Request changes on a pull request',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-        comment: {
-          type: 'string',
-          description: 'Comment explaining requested changes (optional)',
-        },
-      },
-      required: ['workspace', 'repository', 'pull_request_id'],
-    },
-  },
-  {
-    name: 'remove_requested_changes',
-    description: 'Remove change request from a pull request',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-      },
-      required: ['workspace', 'repository', 'pull_request_id'],
-    },
-  },
-  {
-    name: 'get_branch',
-    description: 'Get detailed information about a branch including associated pull requests',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        branch_name: {
-          type: 'string',
-          description: 'Branch name to get details for',
-        },
-        include_merged_prs: {
-          type: 'boolean',
-          description: 'Include merged PRs from this branch (default: false)',
-        },
-      },
-      required: ['workspace', 'repository', 'branch_name'],
-    },
-  },
-  {
-    name: 'list_directory_content',
-    description: 'List files and directories in a repository path',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        path: {
-          type: 'string',
-          description: 'Directory path (optional, defaults to root, e.g., "src/components")',
-        },
-        branch: {
-          type: 'string',
-          description: 'Branch name (optional, defaults to default branch)',
-        },
-      },
-      required: ['workspace', 'repository'],
-    },
-  },
-  {
-    name: 'search_files',
-    description: 'Search for files by name or path pattern in a repository. Returns matching file paths recursively.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pattern: {
-          type: 'string',
-          description: 'Glob pattern to filter files (e.g., "*.ts", "**/*.java", "**/Controller*"). If not provided, returns all files.',
-        },
-        path: {
-          type: 'string',
-          description: 'Subdirectory to search within (optional, defaults to repository root)',
-        },
-        branch: {
-          type: 'string',
-          description: 'Branch name (optional, defaults to default branch)',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of matching files to return (default: 100)',
-        },
-      },
-      required: ['workspace', 'repository'],
-    },
-  },
-  {
-    name: 'get_file_content',
-    description: 'Get file content from a repository with smart truncation for large files',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        file_path: {
-          type: 'string',
-          description: 'Path to the file (e.g., "src/index.ts")',
-        },
-        branch: {
-          type: 'string',
-          description: 'Branch name (optional, defaults to default branch)',
-        },
-        start_line: {
-          type: 'number',
-          description: 'Starting line number (1-based). Use negative for lines from end (optional)',
-        },
-        line_count: {
-          type: 'number',
-          description: 'Number of lines to return (optional, default varies by file size)',
-        },
-        full_content: {
-          type: 'boolean',
-          description: 'Force return full content regardless of size (optional, default: false)',
-        },
-      },
-      required: ['workspace', 'repository', 'file_path'],
-    },
-  },
-  {
-    name: 'list_branch_commits',
-    description: 'List commits in a branch with detailed information and filtering options',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        branch_name: {
-          type: 'string',
-          description: 'Branch name to get commits from',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of commits to return (default: 25)',
-        },
-        start: {
-          type: 'number',
-          description: 'Start index for pagination (default: 0)',
-        },
-        since: {
-          type: 'string',
-          description: 'ISO date string - only show commits after this date (optional)',
-        },
-        until: {
-          type: 'string',
-          description: 'ISO date string - only show commits before this date (optional)',
-        },
-        author: {
-          type: 'string',
-          description: 'Filter by author email/username (optional)',
-        },
-        include_merge_commits: {
-          type: 'boolean',
-          description: 'Include merge commits in results (default: true)',
-        },
-        search: {
-          type: 'string',
-          description: 'Search for text in commit messages (optional)',
-        },
-        include_build_status: {
-          type: 'boolean',
-          description: 'Include CI/CD build status for each commit (Bitbucket Server only, default: false)',
-        },
-      },
-      required: ['workspace', 'repository', 'branch_name'],
-    },
-  },
-  {
-    name: 'list_pr_commits',
-    description: 'List all commits that are part of a pull request',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of commits to return (default: 25)',
-        },
-        start: {
-          type: 'number',
-          description: 'Start index for pagination (default: 0)',
-        },
-        include_build_status: {
-          type: 'boolean',
-          description: 'Include CI/CD build status for each commit (Bitbucket Server only, default: false)',
-        },
-      },
-      required: ['workspace', 'repository', 'pull_request_id'],
-    },
-  },
-  {
-    name: 'search_code',
-    description: 'Search for code across Bitbucket repositories with enhanced context-aware search patterns (currently only supported for Bitbucket Server)',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug to search in (optional, searches all repos if not specified)',
-        },
-        search_query: {
-          type: 'string',
-          description: 'The search term or phrase to look for in code (e.g., "variable")',
-        },
-        search_context: {
-          type: 'string',
-          enum: ['assignment', 'declaration', 'usage', 'exact', 'any'],
-          description: 'Context to search for: assignment (term=value), declaration (defining term), usage (calling/accessing term), exact (quoted match), or any (all patterns)',
-        },
-        file_pattern: {
-          type: 'string',
-          description: 'File path pattern to filter results (e.g., "*.java", "src/**/*.ts") (optional)',
-        },
-        include_patterns: {
-          type: 'array',
-          items: { type: 'string' },
-          description: 'Additional custom search patterns to include (e.g., ["variable =", ".variable"]) (optional)',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of results to return (default: 25)',
-        },
-        start: {
-          type: 'number',
-          description: 'Start index for pagination (default: 0)',
-        },
-      },
-      required: ['workspace', 'search_query'],
-    },
-  },
-  {
-    name: 'search_repositories',
-    description: 'Search for repositories by name or description (Bitbucket Server only)',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        search_query: {
-          type: 'string',
-          description: 'Repository name or keyword to search for (e.g., "backend", "dashboard")',
-        },
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key to filter search (optional, e.g., "PROJ")',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of repositories to return (default: 10)',
-        },
-      },
-      required: ['search_query'],
-    },
-  },
-  {
-    name: 'list_projects',
-    description: 'List all accessible Bitbucket projects with optional filtering',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name: {
-          type: 'string',
-          description: 'Filter by project name (partial match, optional)',
-        },
-        permission: {
-          type: 'string',
-          description: 'Filter by permission level (e.g., PROJECT_READ, PROJECT_WRITE, PROJECT_ADMIN, optional)',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of projects to return (default: 25)',
-        },
-        start: {
-          type: 'number',
-          description: 'Start index for pagination (default: 0)',
-        },
-      },
-      required: [],
-    },
-  },
-  {
-    name: 'list_repositories',
-    description: 'List repositories in a project or across all accessible projects',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key to filter repositories (optional, if not provided lists all accessible repos)',
-        },
-        name: {
-          type: 'string',
-          description: 'Filter by repository name (partial match, optional)',
-        },
-        permission: {
-          type: 'string',
-          description: 'Filter by permission level (e.g., REPO_READ, REPO_WRITE, REPO_ADMIN, optional)',
-        },
-        limit: {
-          type: 'number',
-          description: 'Maximum number of repositories to return (default: 25)',
-        },
-        start: {
-          type: 'number',
-          description: 'Start index for pagination (default: 0)',
-        },
-      },
-      required: [],
-    },
-  },
-  // PR Task tools
+
+  // ── PR_TASKS (server_only) ────────────────────────────────────────────────
   {
     name: 'list_pr_tasks',
-    description: 'List all tasks (checklist items) on a pull request (Bitbucket Server only)',
+    description: 'List all tasks on a pull request (Bitbucket Server only)',
+    group: 'pr_tasks',
+    availability: 'server_only',
     inputSchema: {
       type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-      },
+      properties: { workspace: W, repository: R, pull_request_id: PRID },
       required: ['workspace', 'repository', 'pull_request_id'],
     },
   },
   {
     name: 'create_pr_task',
-    description: 'Create a new task (checklist item) on a pull request (Bitbucket Server only)',
+    description: 'Create a new task on a pull request (Bitbucket Server only)',
+    group: 'pr_tasks',
+    availability: 'server_only',
     inputSchema: {
       type: 'object',
       properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-        text: {
-          type: 'string',
-          description: 'Task description text',
-        },
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
+        text: { type: 'string', description: 'Task description' },
       },
       required: ['workspace', 'repository', 'pull_request_id', 'text'],
     },
@@ -875,161 +304,296 @@ export const toolDefinitions = [
   {
     name: 'update_pr_task',
     description: 'Update the text of an existing task on a pull request (Bitbucket Server only)',
+    group: 'pr_tasks',
+    availability: 'server_only',
     inputSchema: {
       type: 'object',
       properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-        task_id: {
-          type: 'number',
-          description: 'Task ID to update',
-        },
-        text: {
-          type: 'string',
-          description: 'New task description text',
-        },
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
+        task_id: TASK_ID,
+        text: { type: 'string', description: 'New task description' },
       },
       required: ['workspace', 'repository', 'pull_request_id', 'task_id', 'text'],
     },
   },
   {
-    name: 'mark_pr_task_done',
-    description: 'Mark a task as done/resolved on a pull request (Bitbucket Server only)',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-        task_id: {
-          type: 'number',
-          description: 'Task ID to mark as done',
-        },
-      },
-      required: ['workspace', 'repository', 'pull_request_id', 'task_id'],
-    },
-  },
-  {
-    name: 'unmark_pr_task_done',
-    description: 'Reopen a resolved task on a pull request (Bitbucket Server only)',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-        task_id: {
-          type: 'number',
-          description: 'Task ID to reopen',
-        },
-      },
-      required: ['workspace', 'repository', 'pull_request_id', 'task_id'],
-    },
-  },
-  {
     name: 'delete_pr_task',
     description: 'Delete a task from a pull request (Bitbucket Server only)',
+    group: 'pr_tasks',
+    availability: 'server_only',
     inputSchema: {
       type: 'object',
-      properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-        task_id: {
-          type: 'number',
-          description: 'Task ID to delete',
-        },
-      },
+      properties: { workspace: W, repository: R, pull_request_id: PRID, task_id: TASK_ID },
       required: ['workspace', 'repository', 'pull_request_id', 'task_id'],
     },
   },
   {
-    name: 'convert_comment_to_task',
-    description: 'Convert an existing comment to a task on a pull request (Bitbucket Server only)',
+    name: 'set_pr_task_status',
+    description: 'Mark a task as done or reopen it on a pull request (Bitbucket Server only)',
+    group: 'pr_tasks',
+    availability: 'server_only',
     inputSchema: {
       type: 'object',
       properties: {
-        workspace: {
-          type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-        comment_id: {
-          type: 'number',
-          description: 'Comment ID to convert to a task',
-        },
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
+        task_id: TASK_ID,
+        done: { type: 'boolean', description: 'true to mark done, false to reopen' },
       },
-      required: ['workspace', 'repository', 'pull_request_id', 'comment_id'],
+      required: ['workspace', 'repository', 'pull_request_id', 'task_id', 'done'],
     },
   },
   {
-    name: 'convert_task_to_comment',
-    description: 'Convert a task back to a regular comment on a pull request (Bitbucket Server only)',
+    name: 'convert_pr_item',
+    description: 'Convert a comment to a task or a task back to a comment (Bitbucket Server only)',
+    group: 'pr_tasks',
+    availability: 'server_only',
     inputSchema: {
       type: 'object',
       properties: {
-        workspace: {
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
+        id: { type: 'number', description: 'Comment ID (when direction is to_task) or Task ID (when direction is to_comment)' },
+        direction: {
           type: 'string',
-          description: 'Bitbucket workspace/project key (e.g., "PROJ")',
-        },
-        repository: {
-          type: 'string',
-          description: 'Repository slug (e.g., "my-repo")',
-        },
-        pull_request_id: {
-          type: 'number',
-          description: 'Pull request ID',
-        },
-        task_id: {
-          type: 'number',
-          description: 'Task ID to convert to a comment',
+          enum: ['to_task', 'to_comment'],
+          description: 'Conversion direction',
         },
       },
-      required: ['workspace', 'repository', 'pull_request_id', 'task_id'],
+      required: ['workspace', 'repository', 'pull_request_id', 'id', 'direction'],
+    },
+  },
+
+  // ── COMMITS ───────────────────────────────────────────────────────────────
+  {
+    name: 'list_pr_commits',
+    description: 'List all commits in a pull request',
+    group: 'commits',
+    availability: 'both',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
+        limit: LIMIT,
+        start: START,
+        include_build_status: { type: 'boolean', description: 'Include CI/CD build status per commit (Server only, default: false)' },
+      },
+      required: ['workspace', 'repository', 'pull_request_id'],
+    },
+  },
+  {
+    name: 'list_branch_commits',
+    description: 'List commits in a branch with optional filters',
+    group: 'commits',
+    availability: 'both',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: W,
+        repository: R,
+        branch_name: { type: 'string', description: 'Branch name' },
+        limit: LIMIT,
+        start: START,
+        since: { type: 'string', description: 'ISO date — only commits after this date (optional)' },
+        until: { type: 'string', description: 'ISO date — only commits before this date (optional)' },
+        author: { type: 'string', description: 'Filter by author name (optional)' },
+        include_merge_commits: { type: 'boolean', description: 'Include merge commits (default: true)' },
+        search: { type: 'string', description: 'Search text in commit messages (optional)' },
+        include_build_status: { type: 'boolean', description: 'Include CI/CD build status per commit (Server only, default: false)' },
+      },
+      required: ['workspace', 'repository', 'branch_name'],
+    },
+  },
+
+  // ── BRANCHES ──────────────────────────────────────────────────────────────
+  {
+    name: 'list_branches',
+    description: 'List branches in a repository',
+    group: 'branches',
+    availability: 'both',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: W,
+        repository: R,
+        filter: { type: 'string', description: 'Filter by name pattern (optional)' },
+        limit: LIMIT,
+        start: START,
+      },
+      required: ['workspace', 'repository'],
+    },
+  },
+  {
+    name: 'get_branch',
+    description: 'Get detailed information about a branch including its latest commit and associated pull requests',
+    group: 'branches',
+    availability: 'both',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: W,
+        repository: R,
+        branch_name: { type: 'string', description: 'Branch name' },
+        include_merged_prs: { type: 'boolean', description: 'Include merged PRs from this branch (default: false)' },
+      },
+      required: ['workspace', 'repository', 'branch_name'],
+    },
+  },
+  {
+    name: 'delete_branch',
+    description: 'Delete a branch',
+    group: 'branches',
+    availability: 'both',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: W,
+        repository: R,
+        branch_name: { type: 'string', description: 'Branch name to delete' },
+        force: { type: 'boolean', description: 'Force delete even if not merged (default: false)' },
+      },
+      required: ['workspace', 'repository', 'branch_name'],
+    },
+  },
+
+  // ── FILES ─────────────────────────────────────────────────────────────────
+  {
+    name: 'list_directory_content',
+    description: 'List files and directories in a repository path',
+    group: 'files',
+    availability: 'both',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: W,
+        repository: R,
+        path: { type: 'string', description: 'Directory path (default: root, e.g. "src/components")' },
+        branch: BRANCH,
+      },
+      required: ['workspace', 'repository'],
+    },
+  },
+  {
+    name: 'get_file_content',
+    description: 'Get file content from a repository with smart truncation for large files',
+    group: 'files',
+    availability: 'both',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: W,
+        repository: R,
+        file_path: { type: 'string', description: 'File path, e.g. "src/index.ts"' },
+        branch: BRANCH,
+        start_line: { type: 'number', description: 'Starting line (1-based, negative = from end) (optional)' },
+        line_count: { type: 'number', description: 'Number of lines to return (optional)' },
+        full_content: { type: 'boolean', description: 'Return full content regardless of size (default: false)' },
+      },
+      required: ['workspace', 'repository', 'file_path'],
+    },
+  },
+  {
+    name: 'search_files',
+    description: 'Search for files by name or path pattern in a repository',
+    group: 'files',
+    availability: 'both',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: W,
+        repository: R,
+        pattern: { type: 'string', description: 'Glob pattern, e.g. "*.ts", "**/*.java", "**/Controller*" (optional, returns all files if omitted)' },
+        path: { type: 'string', description: 'Subdirectory to search within (optional)' },
+        branch: BRANCH,
+        limit: { type: 'number', description: 'Max matching files to return (default: 100)' },
+      },
+      required: ['workspace', 'repository'],
+    },
+  },
+
+  // ── SEARCH (server_only) ──────────────────────────────────────────────────
+  {
+    name: 'search_code',
+    description: 'Search for code across Bitbucket Server repositories (Server only)',
+    group: 'search',
+    availability: 'server_only',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: W,
+        repository: { type: 'string', description: 'Repo slug to search in (optional, searches all repos if omitted)' },
+        search_query: { type: 'string', description: 'Term or phrase to search for in code' },
+        search_context: {
+          type: 'string',
+          enum: ['assignment', 'declaration', 'usage', 'exact', 'any'],
+          description: 'Search context: assignment (x=y), declaration (defining x), usage (calling x), exact (quoted), any (all patterns, default)',
+        },
+        file_pattern: { type: 'string', description: 'File path filter, e.g. "*.java", "src/**/*.ts" (optional)' },
+        include_patterns: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Custom search patterns to include (optional)',
+        },
+        limit: { type: 'number', description: 'Max results (default: 25)' },
+        start: START,
+      },
+      required: ['workspace', 'search_query'],
+    },
+  },
+  {
+    name: 'search_repositories',
+    description: 'Search for repositories by name or description (Bitbucket Server only)',
+    group: 'search',
+    availability: 'server_only',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        search_query: { type: 'string', description: 'Repository name or keyword to search for' },
+        workspace: { type: 'string', description: 'Project key to filter search (optional)' },
+        limit: { type: 'number', description: 'Max results (default: 10)' },
+      },
+      required: ['search_query'],
+    },
+  },
+
+  // ── DISCOVERY ─────────────────────────────────────────────────────────────
+  {
+    name: 'list_projects',
+    description: 'List all accessible Bitbucket projects/workspaces with optional filtering',
+    group: 'discovery',
+    availability: 'both',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Filter by project name (partial match, optional)' },
+        permission: { type: 'string', description: 'Filter by permission level, e.g. PROJECT_READ (optional)' },
+        limit: LIMIT,
+        start: START,
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'list_repositories',
+    description: 'List repositories in a project or across all accessible projects',
+    group: 'discovery',
+    availability: 'both',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: { type: 'string', description: 'Project key to filter repositories (optional, lists all if omitted)' },
+        name: { type: 'string', description: 'Filter by repository name (partial match, optional)' },
+        permission: { type: 'string', description: 'Filter by permission level, e.g. REPO_READ (optional)' },
+        limit: LIMIT,
+        start: START,
+      },
+      required: [],
     },
   },
 ];
