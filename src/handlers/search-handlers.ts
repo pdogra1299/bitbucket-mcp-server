@@ -128,6 +128,18 @@ export class SearchHandlers {
       const smartQuery = buildSmartQuery(search_query, search_context, include_patterns);
       query += ` ${smartQuery}`;
 
+      // Validate query length against Bitbucket's 250-character limit
+      const finalQuery = query.trim();
+      if (finalQuery.length > 250) {
+        return {
+          content: [{
+            type: 'text',
+            text: `Search query is ${finalQuery.length} characters, exceeding Bitbucket's 250 character limit. Please shorten your query to under 250 characters.\n\nConstructed query: ${finalQuery}`
+          }],
+          isError: true
+        };
+      }
+
       // Prepare the request payload
       const payload: BitbucketServerSearchRequest = {
         query: query.trim(),
