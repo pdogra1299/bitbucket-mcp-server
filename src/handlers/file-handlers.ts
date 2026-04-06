@@ -219,14 +219,17 @@ export class FileHandlers {
         }
 
         // Follow the download link to get actual content
-        const downloadUrl = metadataResponse.links.download.href;
+        const downloadUrl = metadataResponse.links?.download?.href
+          ?? metadataResponse.links?.self?.href
+          ?? metaPath;
+        const isAbsoluteUrl = downloadUrl.startsWith('http');
         const downloadResponse = await this.apiClient.makeRequest<any>('get', downloadUrl, undefined, {
-          baseURL: '', // Use full URL
+          ...(isAbsoluteUrl ? { baseURL: '' } : {}),
           responseType: 'text',
           headers: { 'Accept': 'text/plain' }
         });
         
-        fileContent = downloadResponse;
+        fileContent = typeof downloadResponse === 'string' ? downloadResponse : JSON.stringify(downloadResponse);
       }
 
       // Apply line filtering if requested
