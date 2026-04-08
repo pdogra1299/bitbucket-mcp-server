@@ -37,6 +37,7 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 #### Commits (`commits`)
 - `list_pr_commits` - List all commits in a pull request
 - `list_branch_commits` - List commits in a branch with date/author/message filters
+- `get_commit_detail` - Get the structured diff for a specific commit by SHA
 
 #### Branches (`branches`)
 - `list_branches` - List branches with filtering and pagination
@@ -208,7 +209,7 @@ Reduce the number of tools sent to the LLM on every request by setting `BITBUCKE
 | `pr_comments` | `add_comment`, `delete_comment` | Both |
 | `pr_review` | `get_pull_request_diff`, `set_pr_approval`, `set_review_status` | Both |
 | `pr_tasks` | `list_pr_tasks`, `create_pr_task`, `update_pr_task`, `set_pr_task_status`, `delete_pr_task`, `convert_pr_item` | Server only |
-| `commits` | `list_pr_commits`, `list_branch_commits` | Both |
+| `commits` | `list_pr_commits`, `list_branch_commits`, `get_commit_detail` | Both |
 | `branches` | `list_branches`, `get_branch`, `delete_branch` | Both |
 | `files` | `list_directory_content`, `get_file_content`, `search_files` | Both |
 | `search` | `search_code`, `search_repositories` | Server only |
@@ -978,6 +979,115 @@ This tool is particularly useful for:
 - Verifying authorship of changes
 - Analyzing PR complexity by commit count
 - Monitoring CI/CD build status for all PR commits (Bitbucket Server only)
+
+### Get Commit Detail
+
+Get the diff for a specific commit by SHA with structured line-by-line information. Returns files with hunks containing individual lines, each with line numbers and ADDED/REMOVED/CONTEXT type information.
+
+```typescript
+// Basic usage - get full commit diff
+{
+  "tool": "get_commit_detail",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "commit_id": "abc123def456",
+    "context_lines": 5  // Optional (default: 3)
+  }
+}
+
+// Get diff for a specific file only
+{
+  "tool": "get_commit_detail",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "commit_id": "abc123def456",
+    "file_path": "src/index.ts"
+  }
+}
+
+// Exclude generated/lock files
+{
+  "tool": "get_commit_detail",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "commit_id": "abc123def456",
+    "exclude_patterns": ["*.lock", "*.svg", "node_modules/**"]
+  }
+}
+
+// Include only specific file types
+{
+  "tool": "get_commit_detail",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "commit_id": "abc123def456",
+    "include_patterns": ["*.ts", "src/**/*.js"]
+  }
+}
+```
+
+**Structured Response Format (Bitbucket Server):**
+
+```json
+{
+  "commit_id": "abc123def456",
+  "files": [
+    {
+      "file_path": "src/index.ts",
+      "old_path": null,
+      "status": "modified",
+      "hunks": [
+        {
+          "context": "export function foo() {",
+          "source_start": 10,
+          "source_span": 5,
+          "destination_start": 10,
+          "destination_span": 6,
+          "lines": [
+            {
+              "source_line": 10,
+              "destination_line": 10,
+              "type": "CONTEXT",
+              "content": "  const x = 1;"
+            },
+            {
+              "source_line": 11,
+              "destination_line": 11,
+              "type": "REMOVED",
+              "content": "  return x;"
+            },
+            {
+              "source_line": 11,
+              "destination_line": 11,
+              "type": "ADDED",
+              "content": "  return x + 1;"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_files": 3,
+    "files_included": 1,
+    "files_excluded": 2
+  },
+  "filter_metadata": {
+    "filters_applied": {
+      "file_path": "src/index.ts"
+    }
+  }
+}
+```
+
+This tool is particularly useful for:
+- Reviewing exactly what changed in a specific commit
+- Auditing a commit before or after it lands on a branch
+- Getting structured diff data for automated analysis
 
 ### Get Pull Request Diff
 

@@ -4,8 +4,11 @@ import {
   isListBranchesArgs,
   isDeleteBranchArgs,
   isGetBranchArgs,
-  isListBranchCommitsArgs
+  isListBranchCommitsArgs,
+  isGetCommitDetailArgs
 } from '../types/guards.js';
+import { DiffParser } from '../utils/diff-parser.js';
+import { minimatch } from 'minimatch';
 import { 
   BitbucketServerBranch, 
   BitbucketCloudBranch,
@@ -618,5 +621,203 @@ export class BranchHandlers {
     } catch (error) {
       return this.apiClient.handleApiError(error, `listing commits for branch '${branch_name}' in ${workspace}/${repository}`);
     }
+  }
+
+  async handleGetCommitDetail(args: any) {
+    if (!isGetCommitDetailArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for get_commit_detail'
+      );
+    }
+
+    const {
+      workspace,
+      repository,
+      commit_id,
+      context_lines = 3,
+      include_patterns,
+      exclude_patterns,
+      file_path
+    } = args;
+
+    try {
+      if (this.apiClient.getIsServer()) {
+        let apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/commits/${commit_id}/diff`;
+        const params: any = { contextLines: context_lines };
+
+        if (file_path) {
+          apiPath = `${apiPath}/${file_path}`;
+        }
+
+        const jsonResponse = await this.apiClient.makeRequest<any>(
+          'get', apiPath, undefined,
+          { params, headers: { 'Accept': 'application/json' } }
+        );
+
+        const structured = this.transformServerCommitDiff(jsonResponse, commit_id, include_patterns, exclude_patterns, file_path);
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify(structured, null, 2) }],
+        };
+      } else {
+        // Bitbucket Cloud: GET /repositories/{workspace}/{repo}/diff/{commit_id}
+        let apiPath = `/repositories/${workspace}/${repository}/diff/${commit_id}`;
+        const params: any = { context: context_lines };
+
+        if (file_path) {
+          params.path = file_path;
+        }
+
+        const rawDiff = await this.apiClient.makeRequest<string>(
+          'get', apiPath, undefined,
+          { params, headers: { 'Accept': 'text/plain' } }
+        );
+
+        const needsFiltering = file_path || include_patterns || exclude_patterns;
+
+        if (!needsFiltering) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ commit_id, diff: rawDiff }, null, 2) }],
+          };
+        }
+
+        const diffParser = new DiffParser();
+        const sections = diffParser.parseDiffIntoSections(rawDiff);
+        const filteredResult = diffParser.filterSections(sections, {
+          includePatterns: include_patterns,
+          excludePatterns: exclude_patterns,
+          filePath: file_path
+        });
+        const filteredDiff = diffParser.reconstructDiff(filteredResult.sections);
+
+        const response: any = { commit_id, diff: filteredDiff };
+
+        if (filteredResult.metadata.excludedFiles > 0 || file_path || include_patterns || exclude_patterns) {
+          response.filter_metadata = {
+            total_files: filteredResult.metadata.totalFiles,
+            included_files: filteredResult.metadata.includedFiles,
+            excluded_files: filteredResult.metadata.excludedFiles,
+            filters_applied: {} as any
+          };
+          if (filteredResult.metadata.excludedFileList.length > 0) {
+            response.filter_metadata.excluded_file_list = filteredResult.metadata.excludedFileList;
+          }
+          if (file_path) response.filter_metadata.filters_applied.file_path = file_path;
+          if (include_patterns) response.filter_metadata.filters_applied.include_patterns = include_patterns;
+          if (exclude_patterns) response.filter_metadata.filters_applied.exclude_patterns = exclude_patterns;
+        }
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify(response, null, 2) }],
+        };
+      }
+    } catch (error) {
+      return this.apiClient.handleApiError(error, `getting diff for commit ${commit_id} in ${workspace}/${repository}`);
+    }
+  }
+
+  private transformServerCommitDiff(
+    response: any,
+    commitId: string,
+    includePatterns?: string[],
+    excludePatterns?: string[],
+    filePath?: string
+  ) {
+    const allDiffs = response.diffs || [];
+    const excludedFileList: string[] = [];
+
+    let filteredDiffs = allDiffs;
+
+    if (filePath) {
+      filteredDiffs = allDiffs.filter((diff: any) => {
+        const destPath = diff.destination?.toString;
+        const srcPath = diff.source?.toString;
+        const matches = destPath === filePath || srcPath === filePath;
+        if (!matches) excludedFileList.push(destPath || srcPath);
+        return matches;
+      });
+    } else {
+      if (excludePatterns && excludePatterns.length > 0) {
+        filteredDiffs = filteredDiffs.filter((diff: any) => {
+          const fp = diff.destination?.toString || diff.source?.toString;
+          const shouldExclude = excludePatterns.some(p => minimatch(fp, p, { matchBase: true }));
+          if (shouldExclude) excludedFileList.push(fp);
+          return !shouldExclude;
+        });
+      }
+      if (includePatterns && includePatterns.length > 0) {
+        filteredDiffs = filteredDiffs.filter((diff: any) => {
+          const fp = diff.destination?.toString || diff.source?.toString;
+          const shouldInclude = includePatterns.some(p => minimatch(fp, p, { matchBase: true }));
+          if (!shouldInclude) excludedFileList.push(fp);
+          return shouldInclude;
+        });
+      }
+    }
+
+    const files = filteredDiffs.map((diff: any) => {
+      const destPath = diff.destination?.toString;
+      const srcPath = diff.source?.toString;
+
+      let status: 'added' | 'deleted' | 'modified' | 'renamed' = 'modified';
+      if (!srcPath || srcPath === '/dev/null') {
+        status = 'added';
+      } else if (!destPath || destPath === '/dev/null') {
+        status = 'deleted';
+      } else if (srcPath !== destPath) {
+        status = 'renamed';
+      }
+
+      const hunks = (diff.hunks || []).map((hunk: any) => {
+        const lines: any[] = [];
+        for (const segment of (hunk.segments || [])) {
+          const lineType = segment.type as 'ADDED' | 'REMOVED' | 'CONTEXT';
+          for (const line of (segment.lines || [])) {
+            lines.push({
+              source_line: line.source,
+              destination_line: line.destination,
+              type: lineType,
+              content: line.line
+            });
+          }
+        }
+        return {
+          context: hunk.context || '',
+          source_start: hunk.sourceLine,
+          source_span: hunk.sourceSpan,
+          destination_start: hunk.destinationLine,
+          destination_span: hunk.destinationSpan,
+          lines
+        };
+      });
+
+      return {
+        file_path: destPath || srcPath,
+        old_path: (srcPath && srcPath !== destPath) ? srcPath : null,
+        status,
+        hunks
+      };
+    });
+
+    const result: any = {
+      commit_id: commitId,
+      files,
+      summary: {
+        total_files: allDiffs.length,
+        files_included: files.length,
+        files_excluded: excludedFileList.length
+      }
+    };
+
+    if (filePath || includePatterns || excludePatterns) {
+      result.filter_metadata = { filters_applied: {} as any };
+      if (filePath) result.filter_metadata.filters_applied.file_path = filePath;
+      if (includePatterns) result.filter_metadata.filters_applied.include_patterns = includePatterns;
+      if (excludePatterns) result.filter_metadata.filters_applied.exclude_patterns = excludePatterns;
+      if (excludedFileList.length > 0) result.filter_metadata.excluded_file_list = excludedFileList;
+    }
+
+    return result;
   }
 }

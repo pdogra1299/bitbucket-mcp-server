@@ -411,6 +411,34 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
 
+  {
+    name: 'get_commit_detail',
+    description: 'Get the diff for a specific commit with structured line-by-line information. Each line has source_line, destination_line, type (ADDED/REMOVED/CONTEXT), and content.',
+    group: 'commits',
+    availability: 'both',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: W,
+        repository: R,
+        commit_id: { type: 'string', description: 'Commit hash (full or abbreviated SHA)' },
+        context_lines: { type: 'number', description: 'Context lines around changes (default: 3)' },
+        include_patterns: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Glob patterns to include, e.g. ["*.ts", "src/**/*.js"] (optional)',
+        },
+        exclude_patterns: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Glob patterns to exclude, e.g. ["*.lock", "*.svg"] (optional)',
+        },
+        file_path: { type: 'string', description: 'Get diff for a specific file only, e.g. "src/index.ts" (optional)' },
+      },
+      required: ['workspace', 'repository', 'commit_id'],
+    },
+  },
+
   // ── BRANCHES ──────────────────────────────────────────────────────────────
   {
     name: 'list_branches',

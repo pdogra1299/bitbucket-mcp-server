@@ -151,6 +151,8 @@ class BitbucketMCPServer {
           return this.branchHandlers.handleGetBranch(request.params.arguments);
         case 'list_branch_commits':
           return this.branchHandlers.handleListBranchCommits(request.params.arguments);
+        case 'get_commit_detail':
+          return this.branchHandlers.handleGetCommitDetail(request.params.arguments);
         
         // Code Review tools
         case 'get_pull_request_diff':
