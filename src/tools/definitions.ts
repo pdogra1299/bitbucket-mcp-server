@@ -527,6 +527,25 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
   {
+    name: 'get_file_blame',
+    description: 'Get per-line blame for a file — who last modified each line, the commit hash, and author timestamp. Use the returned commit_id with get_commit_detail to see what actually changed. Bitbucket Server only.',
+    group: 'files',
+    availability: 'server_only',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: W,
+        repository: R,
+        file_path: { type: 'string', description: 'File path, e.g. "src/index.ts"' },
+        branch: BRANCH,
+        start_line: { type: 'number', description: 'Starting line (1-based) to limit output (optional)' },
+        line_count: { type: 'number', description: 'Number of lines to return from start_line (optional)' },
+        group_by_commit: { type: 'boolean', description: 'Group contiguous lines from the same commit into ranges (default: true)' },
+      },
+      required: ['workspace', 'repository', 'file_path'],
+    },
+  },
+  {
     name: 'search_files',
     description: 'Search for files by name or path pattern in a repository',
     group: 'files',

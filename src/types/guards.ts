@@ -281,6 +281,27 @@ export const isGetFileContentArgs = (
   (args.line_count === undefined || typeof args.line_count === 'number') &&
   (args.full_content === undefined || typeof args.full_content === 'boolean');
 
+export const isGetFileBlameArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  file_path: string;
+  branch?: string;
+  start_line?: number;
+  line_count?: number;
+  group_by_commit?: boolean;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  typeof args.file_path === 'string' &&
+  (args.branch === undefined || typeof args.branch === 'string') &&
+  (args.start_line === undefined || typeof args.start_line === 'number') &&
+  (args.line_count === undefined || typeof args.line_count === 'number') &&
+  (args.group_by_commit === undefined || typeof args.group_by_commit === 'boolean');
+
 export const isGetCommitDetailArgs = (
   args: any
 ): args is {

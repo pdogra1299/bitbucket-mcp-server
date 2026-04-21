@@ -48,6 +48,7 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 - `list_directory_content` - List files and directories in a repository path
 - `get_file_content` - Get file content with smart truncation for large files
 - `search_files` - Search for files by glob pattern (case-insensitive, like VS Code Ctrl+P)
+- `get_file_blame` - Per-line blame: who last modified each line, commit hash, and author timestamp (Bitbucket Server only)
 
 #### Search — Bitbucket Server only (`search`)
 - `search_code` - Search for code across repositories
@@ -211,7 +212,7 @@ Reduce the number of tools sent to the LLM on every request by setting `BITBUCKE
 | `pr_tasks` | `list_pr_tasks`, `create_pr_task`, `update_pr_task`, `set_pr_task_status`, `delete_pr_task`, `convert_pr_item` | Server only |
 | `commits` | `list_pr_commits`, `list_branch_commits`, `get_commit_detail` | Both |
 | `branches` | `list_branches`, `get_branch`, `delete_branch` | Both |
-| `files` | `list_directory_content`, `get_file_content`, `search_files` | Both |
+| `files` | `list_directory_content`, `get_file_content`, `search_files`, `get_file_blame` (Server only) | Both |
 | `search` | `search_code`, `search_repositories` | Server only |
 | `discovery` | `list_projects`, `list_repositories` | Both |
 
@@ -1473,6 +1474,87 @@ Example responses:
   }
 }
 ```
+
+### Get File Blame
+
+Get per-line authorship (blame) for a file — who last modified each line, the commit hash, and author timestamp. Feed the returned `commit_id` into `get_commit_detail` to see what actually changed.
+
+**Bitbucket Server only.** Bitbucket Cloud does not expose a blame API.
+
+```typescript
+// Full-file blame
+{
+  "tool": "get_file_blame",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "file_path": "src/index.ts"
+  }
+}
+
+// Blame for a specific branch and line range
+{
+  "tool": "get_file_blame",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "file_path": "src/index.ts",
+    "branch": "main",
+    "start_line": 100,
+    "line_count": 20
+  }
+}
+
+// Ungrouped — one entry per line
+{
+  "tool": "get_file_blame",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "file_path": "src/index.ts",
+    "group_by_commit": false
+  }
+}
+```
+
+**Parameters:**
+- `file_path`: File path, e.g. `"src/index.ts"` (required)
+- `branch`: Branch name (optional, defaults to default branch)
+- `start_line`: Starting line (1-based) to limit output (optional)
+- `line_count`: Number of lines to return from `start_line` (optional)
+- `group_by_commit`: Group contiguous lines from the same commit into ranges (default: `true`)
+
+**Response (grouped, default):**
+```json
+{
+  "file_path": "src/index.ts",
+  "branch": "main",
+  "total_lines": 1982,
+  "returned_lines": { "start": 1, "end": 1982 },
+  "unique_commits": 42,
+  "unique_authors": 16,
+  "grouped": true,
+  "blame": [
+    {
+      "line_start": 1,
+      "line_end": 4,
+      "commit_id": "fbbe61e95f51abb8aed8dd5a472074a77b3d0f46",
+      "commit_display_id": "fbbe61e95f5",
+      "author": { "name": "Jane Doe", "email": "jane@example.com" },
+      "date": "2025-04-15T12:01:01.000Z",
+      "original_file_name": "src/index.ts"
+    }
+  ]
+}
+```
+
+**Response (ungrouped, `group_by_commit: false`):** each `blame` entry has a single `line` field instead of `line_start`/`line_end`.
+
+Useful for:
+- Finding the main authors of a file before requesting reviews
+- Tracing who introduced a particular line or block
+- Feeding `commit_id` into `get_commit_detail` to see the full diff of a blamed change
+- Identifying code ownership when refactoring shared modules
 
 ### List Projects
 

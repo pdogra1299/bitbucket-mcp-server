@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.4] - 2026-04-21
+
+### Added
+- **`get_file_blame` tool** — Per-line blame for a file: who last modified each line, the commit hash, author, and timestamp. Supports `branch`, `start_line`/`line_count` windowing, and `group_by_commit` to toggle between range-compressed output (default) and one-entry-per-line output. Feed the returned `commit_id` into `get_commit_detail` to see what actually changed. **Bitbucket Server only** — Bitbucket Cloud does not expose a blame API.
+
 ## [2.0.3] - 2026-04-08
 
 ### Added

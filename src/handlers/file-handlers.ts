@@ -3,7 +3,8 @@ import { BitbucketApiClient } from '../utils/api-client.js';
 import {
   isListDirectoryContentArgs,
   isGetFileContentArgs,
-  isSearchFilesArgs
+  isSearchFilesArgs,
+  isGetFileBlameArgs
 } from '../types/guards.js';
 import { minimatch } from 'minimatch';
 import {
@@ -351,6 +352,214 @@ export class FileHandlers {
       start: defaultLines < 0 ? defaultLines : 1,
       count: Math.abs(defaultLines)
     };
+  }
+
+  async handleGetFileBlame(args: any) {
+    if (!isGetFileBlameArgs(args)) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Invalid arguments for get_file_blame'
+      );
+    }
+
+    if (!this.apiClient.getIsServer()) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: 'get_file_blame is only supported on Bitbucket Server/Data Center. Bitbucket Cloud does not expose a blame API.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const {
+      workspace,
+      repository,
+      file_path,
+      branch,
+      start_line,
+      line_count,
+      group_by_commit = true,
+    } = args;
+
+    try {
+      const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/browse/${file_path}`;
+      const baseParams: any = { blame: 'true' };
+      if (branch) {
+        baseParams.at = `refs/heads/${branch}`;
+      }
+
+      // Blame endpoint paginates by LINE index, not by entry. Response shape:
+      //   { lines, blame, start, size, limit, isLastPage, nextPageStart }
+      // Some versions return a plain array of blame entries instead.
+      const rawEntries: any[] = [];
+      const pageLimit = 1000;
+      let nextStart = 0;
+      let keepGoing = true;
+      const maxPages = 100; // safety cap
+      let pageCount = 0;
+
+      while (keepGoing && pageCount < maxPages) {
+        pageCount++;
+        const params: any = { ...baseParams, start: nextStart, limit: pageLimit };
+        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
+
+        let pageEntries: any[] = [];
+        let pagedWrapper = false;
+        let hasMore: boolean | undefined;
+        let wrapperNext: number | undefined;
+
+        if (Array.isArray(response)) {
+          pageEntries = response;
+        } else if (Array.isArray(response?.blame)) {
+          pageEntries = response.blame;
+          pagedWrapper = true;
+          hasMore = response.isLastPage === false;
+          wrapperNext = typeof response.nextPageStart === 'number' ? response.nextPageStart : undefined;
+        } else if (Array.isArray(response?.values)) {
+          pageEntries = response.values;
+          pagedWrapper = true;
+          hasMore = response.isLastPage === false;
+          wrapperNext = typeof response.nextPageStart === 'number' ? response.nextPageStart : undefined;
+        }
+
+        rawEntries.push(...pageEntries);
+
+        if (pageEntries.length === 0) {
+          keepGoing = false;
+        } else if (pagedWrapper) {
+          keepGoing = hasMore === true;
+          nextStart = wrapperNext ?? nextStart + pageLimit;
+        } else {
+          // Plain array — continue only if full page
+          keepGoing = pageEntries.length >= pageLimit;
+          nextStart += pageEntries.length;
+        }
+      }
+
+      if (rawEntries.length === 0) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                file_path,
+                branch: branch || 'default',
+                total_lines: 0,
+                blame: [],
+                message: 'No blame information returned. The file may be empty or binary.',
+              }, null, 2),
+            },
+          ],
+        };
+      }
+
+      // Normalize entries to { line_start, line_end, commit_id, author, date, message, original_file_name }
+      const normalized = rawEntries.map((entry: any) => {
+        const lineStart = entry.lineNumber ?? entry.line ?? 1;
+        const spanned = entry.spannedLines ?? 1;
+        const lineEnd = lineStart + spanned - 1;
+        const ts = entry.authorTimestamp ?? entry.committerTimestamp;
+        const date = typeof ts === 'number' ? new Date(ts).toISOString() : undefined;
+
+        return {
+          line_start: lineStart,
+          line_end: lineEnd,
+          commit_id: entry.commitHash ?? entry.commitId,
+          commit_display_id: entry.commitDisplayId,
+          author: {
+            name: entry.author?.displayName || entry.displayName || entry.author?.name,
+            email: entry.author?.emailAddress || entry.emailAddress,
+          },
+          date,
+          message: entry.commitMessage,
+          original_file_name: entry.fileName,
+        };
+      }).sort((a, b) => a.line_start - b.line_start);
+
+      const totalLines = normalized.length > 0
+        ? normalized[normalized.length - 1].line_end
+        : 0;
+
+      // Apply line filtering
+      let filterStart = 1;
+      let filterEnd = totalLines;
+      if (start_line !== undefined) {
+        filterStart = Math.max(1, start_line);
+        filterEnd = line_count !== undefined
+          ? Math.min(totalLines, filterStart + line_count - 1)
+          : totalLines;
+      } else if (line_count !== undefined) {
+        filterEnd = Math.min(totalLines, line_count);
+      }
+
+      let filtered = normalized.filter(e => e.line_end >= filterStart && e.line_start <= filterEnd);
+      // Clip ranges to the requested window
+      filtered = filtered.map(e => ({
+        ...e,
+        line_start: Math.max(e.line_start, filterStart),
+        line_end: Math.min(e.line_end, filterEnd),
+      }));
+
+      // Compute summary stats across the filtered set
+      const uniqueCommits = new Set(filtered.map(e => e.commit_id).filter(Boolean));
+      const uniqueAuthors = new Set(
+        filtered.map(e => e.author?.email || e.author?.name).filter(Boolean)
+      );
+
+      let blameOutput: any[];
+      if (group_by_commit) {
+        blameOutput = filtered;
+      } else {
+        blameOutput = [];
+        for (const entry of filtered) {
+          for (let ln = entry.line_start; ln <= entry.line_end; ln++) {
+            blameOutput.push({
+              line: ln,
+              commit_id: entry.commit_id,
+              commit_display_id: entry.commit_display_id,
+              author: entry.author,
+              date: entry.date,
+              message: entry.message,
+              original_file_name: entry.original_file_name,
+            });
+          }
+        }
+      }
+
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              file_path,
+              branch: branch || 'default',
+              total_lines: totalLines,
+              returned_lines: { start: filterStart, end: filterEnd },
+              unique_commits: uniqueCommits.size,
+              unique_authors: uniqueAuthors.size,
+              grouped: group_by_commit,
+              blame: blameOutput,
+            }, null, 2),
+          },
+        ],
+      };
+    } catch (error: any) {
+      if (error.status === 404) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `File '${file_path}' not found in ${workspace}/${repository}${branch ? ` on branch '${branch}'` : ''}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      return this.apiClient.handleApiError(error, `getting blame for '${file_path}' in ${workspace}/${repository}`);
+    }
   }
 
   async handleSearchFiles(args: any) {
