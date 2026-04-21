@@ -130,7 +130,10 @@ For Bitbucket Server:
 
 ## Authentication Setup
 
-This server uses Bitbucket App Passwords for authentication.
+This server supports three authentication modes:
+- **Bitbucket Cloud**: App Password (Basic auth)
+- **Bitbucket Server**: HTTP access token (Bearer auth)
+- **Bitbucket Server with mTLS**: Client certificate (alone or combined with a Bearer token)
 
 ### Creating an App Password
 
@@ -197,6 +200,60 @@ For Bitbucket Server, use:
 **Important for Bitbucket Server users:**
 - Use your full email address as the username (e.g., "john.doe@company.com")
 - This is required for approval/review actions to work correctly
+
+### mTLS (Client Certificate) Authentication
+
+For self-hosted Bitbucket Server deployments that authenticate at the TLS layer with client certificates (common in enterprise zero-trust environments), you can configure mTLS via the following environment variables:
+
+| Variable | Description |
+|---|---|
+| `BITBUCKET_TLS_CLIENT_CERT` | Absolute path to the client certificate PEM file |
+| `BITBUCKET_TLS_CLIENT_KEY` | Absolute path to the client private key PEM file |
+| `BITBUCKET_TLS_CA_CERT` | Absolute path to a CA certificate bundle (optional, for private/internal CAs) |
+| `BITBUCKET_TLS_REJECT_UNAUTHORIZED` | Set to `false` to disable server cert verification (development only — not recommended) |
+
+**mTLS-only authentication** (client cert identifies the user; no token required):
+```json
+{
+  "mcpServers": {
+    "bitbucket": {
+      "command": "node",
+      "args": ["/absolute/path/to/bitbucket-mcp-server/build/index.js"],
+      "env": {
+        "BITBUCKET_USERNAME": "your.email@company.com",
+        "BITBUCKET_BASE_URL": "https://bitbucket.yourcompany.com",
+        "BITBUCKET_TLS_CLIENT_CERT": "/path/to/client.pem",
+        "BITBUCKET_TLS_CLIENT_KEY": "/path/to/client.key",
+        "BITBUCKET_TLS_CA_CERT": "/path/to/ca-chain.pem"
+      }
+    }
+  }
+}
+```
+
+**mTLS + Bearer token** (layered auth — client cert for transport, token for application-level identity):
+```json
+{
+  "mcpServers": {
+    "bitbucket": {
+      "command": "node",
+      "args": ["/absolute/path/to/bitbucket-mcp-server/build/index.js"],
+      "env": {
+        "BITBUCKET_USERNAME": "your.email@company.com",
+        "BITBUCKET_TOKEN": "your-http-access-token",
+        "BITBUCKET_BASE_URL": "https://bitbucket.yourcompany.com",
+        "BITBUCKET_TLS_CLIENT_CERT": "/path/to/client.pem",
+        "BITBUCKET_TLS_CLIENT_KEY": "/path/to/client.key"
+      }
+    }
+  }
+}
+```
+
+**Notes:**
+- When `BITBUCKET_TLS_CLIENT_CERT` is set, `BITBUCKET_TLS_CLIENT_KEY` must also be set (the server will fail fast at startup if one is missing).
+- mTLS is orthogonal to application-level auth: you can use it alone (no token) or combined with a Bearer token or app password.
+- The `BITBUCKET_TLS_CA_CERT` is only needed when your Bitbucket Server's TLS certificate is signed by a private / internal certificate authority that Node.js doesn't trust by default.
 
 ## Tool Group Filtering
 
