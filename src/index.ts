@@ -23,14 +23,41 @@ const BITBUCKET_APP_PASSWORD = process.env.BITBUCKET_APP_PASSWORD;
 const BITBUCKET_TOKEN = process.env.BITBUCKET_TOKEN; // For Bitbucket Server
 const BITBUCKET_BASE_URL = process.env.BITBUCKET_BASE_URL || 'https://api.bitbucket.org/2.0';
 
+// mTLS (client certificate) configuration — for enterprise/self-hosted
+// Bitbucket Server deployments that authenticate at the TLS layer.
+const BITBUCKET_TLS_CLIENT_CERT = process.env.BITBUCKET_TLS_CLIENT_CERT;
+const BITBUCKET_TLS_CLIENT_KEY = process.env.BITBUCKET_TLS_CLIENT_KEY;
+const BITBUCKET_TLS_CA_CERT = process.env.BITBUCKET_TLS_CA_CERT;
+const BITBUCKET_TLS_REJECT_UNAUTHORIZED = process.env.BITBUCKET_TLS_REJECT_UNAUTHORIZED;
+
+const mtlsOptions = {
+  clientCertPath: BITBUCKET_TLS_CLIENT_CERT,
+  clientKeyPath: BITBUCKET_TLS_CLIENT_KEY,
+  caCertPath: BITBUCKET_TLS_CA_CERT,
+  rejectUnauthorized:
+    BITBUCKET_TLS_REJECT_UNAUTHORIZED === undefined
+      ? undefined
+      : BITBUCKET_TLS_REJECT_UNAUTHORIZED.toLowerCase() !== 'false',
+};
+
+const hasMtlsConfig = !!(
+  mtlsOptions.clientCertPath ||
+  mtlsOptions.clientKeyPath ||
+  mtlsOptions.caCertPath ||
+  mtlsOptions.rejectUnauthorized === false
+);
+
 // Optional: comma-separated list of tool groups to expose (e.g. "pr_core,pr_review,files")
 const BITBUCKET_TOOL_GROUPS = process.env.BITBUCKET_TOOL_GROUPS
   ? new Set<ToolGroup>(process.env.BITBUCKET_TOOL_GROUPS.split(',').map(g => g.trim()) as ToolGroup[])
   : null;
 
-// Check for either app password (Cloud) or token (Server)
-if (!BITBUCKET_USERNAME || (!BITBUCKET_APP_PASSWORD && !BITBUCKET_TOKEN)) {
-  console.error('Error: BITBUCKET_USERNAME and either BITBUCKET_APP_PASSWORD (for Cloud) or BITBUCKET_TOKEN (for Server) are required');
+// Validate authentication: need username + (app password, token, or mTLS client cert)
+if (!BITBUCKET_USERNAME || (!BITBUCKET_APP_PASSWORD && !BITBUCKET_TOKEN && !mtlsOptions.clientCertPath)) {
+  console.error('Error: BITBUCKET_USERNAME and one of the following are required:');
+  console.error('  - BITBUCKET_APP_PASSWORD (for Bitbucket Cloud)');
+  console.error('  - BITBUCKET_TOKEN (for Bitbucket Server with Bearer token)');
+  console.error('  - BITBUCKET_TLS_CLIENT_CERT + BITBUCKET_TLS_CLIENT_KEY (for mTLS-protected Bitbucket Server)');
   console.error('Please set these in your MCP settings configuration');
   process.exit(1);
 }
@@ -63,7 +90,8 @@ class BitbucketMCPServer {
       BITBUCKET_BASE_URL,
       BITBUCKET_USERNAME!,
       BITBUCKET_APP_PASSWORD,
-      BITBUCKET_TOKEN
+      BITBUCKET_TOKEN,
+      hasMtlsConfig ? mtlsOptions : undefined
     );
 
     // Initialize handlers
