@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-05-10
+
+### Added
+
+- **`find_in_files` tool** — Content search by listing files and reading them through the raw endpoint. The escape hatch for everything Bitbucket's index does not cover: full PCRE regex, languages the index ignores (e.g. `.hs`), feature branches, and files Bitbucket's index missed despite indexing the language. Same dense JSON output as `search_code`. Concurrency-capped (default 4) with rate-limit detection (429 aborts immediately; 3+ consecutive 403s aborts; transient single 403s are tolerated as per-file permission denials). Surfaces honest diagnostics: `files_scanned`, `files_attempted`, `files_failed`, `files_truncated`. **Bitbucket Server only.**
+
+- **New `search_code` parameters** mapping directly to documented Bitbucket modifiers:
+  - `lang` (`lang:`), `ext` (`ext:`), `path` (`path:`), `archived` (`archived:`), `fork` (`fork:`), `exclude_terms` (each becomes `-term`).
+  - `regex_filter` — client-side regex applied to returned hit lines as a post-filter; lets you narrow without spending Bitbucket query budget.
+  - `case_variants` — runs the query with snake_case ↔ camelCase converted and merges results in one tool call.
+
+- **Index-reach probe** — when `search_code` returns zero hits, the server lists matching files via the same filters; if files exist it surfaces an `INDEX_GAP_LIKELY` warning that names the file count, calls out an unrecognized `lang:` filter when present, and tells the LLM to fall back to `find_in_files`. Distinguishes `PROBE_UNAVAILABLE` (probe could not run) from real zero-results.
+
+- **Soft-degrade query builder** — Bitbucket caps queries at 250 characters and 9 expressions. When constructed clauses exceed either cap, optional clauses (drop priority: `exclude_terms` → `archived` → `fork` → `ext` → `lang` → `path` → `repo`) are removed one at a time with a `QUERY_TRUNCATED` warning. Previously this returned a hard error.
+
+- **Dense JSON response shape** for both search tools:
+  - Only matched lines are returned (previously surrounding-context lines were rendered as if they were matches, inflating output ~10x).
+  - Distinct `total_files` and `total_matches`, plus an `engine` field (`bitbucket_index` or `find_in_files`) so callers know which path served the result.
+  - `diagnostics` block exposes `expression_count`, `query_length`, `dropped_clauses`, and (for `find_in_files`) honest scan counts.
+
+- **Structured warnings** at every failure mode: `INDEX_GAP_LIKELY`, `REGEX_FILTER_REJECTED_ALL`, `PROBE_UNAVAILABLE`, `RATE_LIMITED`, `FETCH_FAILURES`, `FILES_TRUNCATED`, `POSSIBLE_FALSE_NEGATIVE`, `QUERY_TRUNCATED`, `INVALID_REGEX`, `DEPRECATED_PARAM`. Each names the specific cause and the next action.
+
+### Changed
+
+- **Tool descriptions rewritten** for `search_code`, `find_in_files`, `search_files`, `search_repositories`. Lead with USE WHEN / DO NOT USE WHEN, document Bitbucket index quirks (punctuation stripping, ALL-CAPS operators, single-character terms ignored), and state hard limits (250-char query, 9 expressions, 512 KiB per file, default branch only). Language-neutral throughout — no per-language regex tables baked into the server.
+
+- **`search_code` parameter renames** — `search_query` → `query`, `file_pattern` → `ext` / `path`. Old names still accepted with a `DEPRECATED_PARAM` warning. `search_context` and `include_patterns` are accepted but ignored with a deprecation warning (their patterns collapsed at index time due to Bitbucket's punctuation-stripping behavior).
+
+- **`search_repositories`** modernized to the dense JSON shape; accepts both `query` and `search_query` (deprecated).
+
+### Fixed
+
+- **`search_code` smart-query layer was a no-op.** The previous `buildContextualPatterns` generated 7 OR'd patterns (`"foo ="`, `"foo:"`, `"function foo"`, etc.) that all collapsed to bare-term searches at index time because Bitbucket strips punctuation other than `.` and `_`. Worse, the OR-expanded query overflowed the 250-character cap for any identifier roughly 16 characters or longer, returning a hard error. Removed in favor of raw query passthrough plus optional `regex_filter` post-filter.
+
+- **Output bloat** — `formatCodeSearchOutput` printed every line in `hitContexts` (including blank lines, docstring fences, surrounding context) as `Line N: ...`, conflating actual hits with their surroundings. Replaced with a hit-only formatter that filters on Bitbucket's `<em>` markers.
+
+- **Silent fetch failures** in file fan-outs were treated as "no match" and returned with confidence. Now tracked separately; `FETCH_FAILURES` warning includes counts and a sample of failing paths.
+
+- **Inconsistent API path versions** — `listFiles` used `/rest/api/latest/...` while raw content used `/rest/api/1.0/...`. Unified to `latest`.
+
+- **Filters JSON included `undefined` keys** — now stripped.
+
+### Notes
+
+- The Bitbucket index itself has known coverage gaps that cannot be fixed from the MCP layer (e.g. some real source files are simply missing from the index even on the default branch, languages like Haskell appear unindexed in some installations). This release does not paper over those gaps; it makes them visible to the LLM via `INDEX_GAP_LIKELY` and provides `find_in_files` as a working recovery path.
+
 ## [2.0.4] - 2026-04-21
 
 ### Added

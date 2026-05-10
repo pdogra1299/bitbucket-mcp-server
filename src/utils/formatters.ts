@@ -6,7 +6,6 @@ import {
   BitbucketCloudCommit,
   FormattedCommit,
   BitbucketServerSearchResult,
-  FormattedSearchResult
 } from '../types/bitbucket.js';
 
 // Full detail format for get_pull_request
@@ -137,120 +136,116 @@ export function formatCloudCommit(commit: BitbucketCloudCommit): FormattedCommit
   };
 }
 
-export function formatSearchResults(searchResult: BitbucketServerSearchResult): FormattedSearchResult[] {
-  const results: FormattedSearchResult[] = [];
+// ── Dense JSON formatter for search_code / find_in_files ────────────────────
+// Returns only lines that actually match the query (not surrounding context),
+// in a shape designed to be cheap for an LLM to consume.
 
-  if (!searchResult.code?.values) {
-    return results;
-  }
-
-  for (const value of searchResult.code.values) {
-    const fileName = value.file.split('/').pop() || value.file;
-
-    const formattedResult: FormattedSearchResult = {
-      file_path: value.file,
-      file_name: fileName,
-      repository: value.repository.slug,
-      project: value.repository.project.key,
-      matches: []
-    };
-
-    if (value.hitContexts && value.hitContexts.length > 0) {
-      for (const contextGroup of value.hitContexts) {
-        for (const lineContext of contextGroup) {
-          const { text, segments } = parseHighlightedText(lineContext.text);
-
-          formattedResult.matches.push({
-            line_number: lineContext.line,
-            line_content: text,
-            highlighted_segments: segments
-          });
-        }
-      }
-    }
-
-    results.push(formattedResult);
-  }
-
-  return results;
-}
-
-function parseHighlightedText(htmlText: string): {
+export interface DenseSearchHit {
+  line: number;
   text: string;
-  segments: Array<{ text: string; is_match: boolean }>;
-} {
-  const decodedText = htmlText
-    .replace(/&quot;/g, '"')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&')
-    .replace(/&#x2F;/g, '/');
-
-  const segments: Array<{ text: string; is_match: boolean }> = [];
-  let plainText = '';
-
-  const emRegex = /<em>(.*?)<\/em>/g;
-  let lastEnd = 0;
-  let match;
-
-  while ((match = emRegex.exec(decodedText)) !== null) {
-    if (match.index > lastEnd) {
-      const beforeText = decodedText.substring(lastEnd, match.index);
-      segments.push({ text: beforeText, is_match: false });
-      plainText += beforeText;
-    }
-
-    const highlightedText = match[1];
-    segments.push({ text: highlightedText, is_match: true });
-    plainText += highlightedText;
-
-    lastEnd = match.index + match[0].length;
-  }
-
-  if (lastEnd < decodedText.length) {
-    const remainingText = decodedText.substring(lastEnd);
-    segments.push({ text: remainingText, is_match: false });
-    plainText += remainingText;
-  }
-
-  if (segments.length === 0) {
-    segments.push({ text: decodedText, is_match: false });
-    plainText = decodedText;
-  }
-
-  return { text: plainText, segments };
 }
 
-export function formatCodeSearchOutput(searchResult: BitbucketServerSearchResult): string {
-  if (!searchResult.code?.values || searchResult.code.values.length === 0) {
-    return 'No results found';
-  }
+export interface DenseSearchFile {
+  path: string;
+  matches: DenseSearchHit[];
+}
 
-  const outputLines: string[] = [];
+export interface DenseSearchResponse {
+  query: string;
+  filters: Record<string, string | boolean | undefined>;
+  engine: 'bitbucket_index' | 'find_in_files';
+  total_files: number;
+  total_matches: number;
+  files: DenseSearchFile[];
+  warnings: string[];
+  next_start: number | null;
+  diagnostics: {
+    expression_count?: number;
+    query_length?: number;
+    default_branch_only?: boolean;
+    dropped_clauses?: Array<{ role: string; text: string; reason: string }>;
+    files_scanned?: number;
+    files_attempted?: number;
+    files_failed?: number;
+    files_truncated?: boolean;
+  };
+}
 
-  for (const value of searchResult.code.values) {
-    outputLines.push(`File: ${value.file}`);
+const HTML_ENTITIES: Array<[RegExp, string]> = [
+  [/<em>/g, ''],
+  [/<\/em>/g, ''],
+  [/&quot;/g, '"'],
+  [/&lt;/g, '<'],
+  [/&gt;/g, '>'],
+  [/&amp;/g, '&'],
+  [/&#x2F;/g, '/'],
+  [/&#x27;/g, "'"],
+];
 
-    if (value.hitContexts && value.hitContexts.length > 0) {
-      for (const contextGroup of value.hitContexts) {
-        for (const lineContext of contextGroup) {
-          const cleanText = lineContext.text
-            .replace(/<em>/g, '')
-            .replace(/<\/em>/g, '')
-            .replace(/&quot;/g, '"')
-            .replace(/&lt;/g, '<')
-            .replace(/&gt;/g, '>')
-            .replace(/&amp;/g, '&')
-            .replace(/&#x2F;/g, '/')
-            .replace(/&#x27;/g, "'");
+function decodeHitText(s: string): string {
+  let out = s;
+  for (const [pattern, repl] of HTML_ENTITIES) out = out.replace(pattern, repl);
+  return out;
+}
 
-          outputLines.push(`  Line ${lineContext.line}: ${cleanText}`);
+function lineContainsMatch(htmlText: string): boolean {
+  // Bitbucket marks matched segments with <em>...</em>; if the line lacks <em>,
+  // it is surrounding context, not a match line.
+  return /<em>/.test(htmlText);
+}
+
+// Build the dense response from a Bitbucket search result. Strips surrounding-context
+// lines (those without <em> markers) so the output is hit-only.
+export function buildDenseResponseFromIndex(args: {
+  searchResult: BitbucketServerSearchResult;
+  query: string;
+  filters: Record<string, string | boolean | undefined>;
+  warnings?: string[];
+  diagnostics?: DenseSearchResponse['diagnostics'];
+  start: number;
+  limit: number;
+  postFilter?: (line: string) => boolean;
+}): DenseSearchResponse {
+  const { searchResult, query, filters, warnings = [], diagnostics = {}, start, limit, postFilter } = args;
+
+  const code = searchResult.code;
+  const files: DenseSearchFile[] = [];
+  let totalMatches = 0;
+
+  if (code?.values) {
+    for (const value of code.values) {
+      const hits: DenseSearchHit[] = [];
+      const seenLines = new Set<number>();
+      for (const group of value.hitContexts ?? []) {
+        for (const ctx of group) {
+          if (!lineContainsMatch(ctx.text)) continue;
+          const text = decodeHitText(ctx.text);
+          if (postFilter && !postFilter(text)) continue;
+          if (seenLines.has(ctx.line)) continue;
+          seenLines.add(ctx.line);
+          hits.push({ line: ctx.line, text });
         }
       }
+      if (hits.length > 0) {
+        hits.sort((a, b) => a.line - b.line);
+        files.push({ path: value.file, matches: hits });
+        totalMatches += hits.length;
+      }
     }
-
-    outputLines.push('');
   }
 
-  return outputLines.join('\n').trim();
+  const hasMore = code?.isLastPage === false;
+  const nextStart = hasMore ? (code?.nextStart ?? start + limit) : null;
+
+  return {
+    query,
+    filters,
+    engine: 'bitbucket_index',
+    total_files: files.length,
+    total_matches: totalMatches,
+    files,
+    warnings,
+    next_start: nextStart,
+    diagnostics: { default_branch_only: true, ...diagnostics },
+  };
 }

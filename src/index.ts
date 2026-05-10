@@ -49,7 +49,7 @@ class BitbucketMCPServer {
     this.server = new Server(
       {
         name: 'bitbucket-mcp-server',
-        version: '2.0.4',
+        version: '2.1.0',
       },
       {
         capabilities: {
@@ -174,7 +174,9 @@ class BitbucketMCPServer {
         
         // Search tools
         case 'search_code':
-          return this.searchHandlers.handleSearchCode(request.params.arguments);
+          return this.searchHandlers.handleSearchCode(request.params.arguments as any);
+        case 'find_in_files':
+          return this.searchHandlers.handleFindInFiles(request.params.arguments as any);
         case 'search_repositories':
           return this.searchHandlers.handleSearchRepositories(request.params.arguments);
 

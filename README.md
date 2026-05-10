@@ -51,8 +51,9 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 - `get_file_blame` - Per-line blame: who last modified each line, commit hash, and author timestamp (Bitbucket Server only)
 
 #### Search — Bitbucket Server only (`search`)
-- `search_code` - Search for code across repositories
-- `search_repositories` - Search for repositories by name or description
+- `search_code` - Index-backed code search with Bitbucket modifiers (`lang:`, `ext:`, `path:`, `archived:`, `fork:`, `-term`), client-side `regex_filter` post-filter, snake_case ↔ camelCase fanout, and an index-reach probe that surfaces `INDEX_GAP_LIKELY` when the index returns nothing despite matching files existing
+- `find_in_files` - Content search via file listing + raw-content fan-out. Full PCRE regex; works on languages or branches Bitbucket's index does not cover; with rate-limit detection and honest scan diagnostics
+- `search_repositories` - Search for repositories by name, slug, or description
 
 #### Discovery (`discovery`)
 - `list_projects` - List all accessible Bitbucket projects/workspaces
@@ -213,7 +214,7 @@ Reduce the number of tools sent to the LLM on every request by setting `BITBUCKE
 | `commits` | `list_pr_commits`, `list_branch_commits`, `get_commit_detail` | Both |
 | `branches` | `list_branches`, `get_branch`, `delete_branch` | Both |
 | `files` | `list_directory_content`, `get_file_content`, `search_files`, `get_file_blame` (Server only) | Both |
-| `search` | `search_code`, `search_repositories` | Server only |
+| `search` | `search_code`, `find_in_files`, `search_repositories` | Server only |
 | `discovery` | `list_projects`, `list_repositories` | Both |
 
 ### Example presets
@@ -292,7 +293,7 @@ Returns detailed information about the pull request including:
 
 ### Search Code
 
-Search for code across Bitbucket repositories (currently only supported for Bitbucket Server):
+Index-backed exact-term search via Bitbucket Server's search index (Bitbucket Server only). Fast — one API call.
 
 ```typescript
 // Search in a specific repository
@@ -301,79 +302,169 @@ Search for code across Bitbucket repositories (currently only supported for Bitb
   "arguments": {
     "workspace": "PROJ",
     "repository": "my-repo",
-    "search_query": "TODO",
+    "query": "TODO",
     "limit": 50
   }
 }
 
-// Search across all repositories in a workspace
+// Filter by language and exclude noise
 {
   "tool": "search_code",
   "arguments": {
     "workspace": "PROJ",
-    "search_query": "deprecated",
-    "file_pattern": "*.java",  // Optional: filter by file pattern
-    "limit": 100
+    "repository": "my-repo",
+    "query": "deprecated",
+    "lang": "java",
+    "exclude_terms": ["test", "spec"]
   }
 }
 
-// Search with file pattern filtering
+// Filter by extension and post-filter the result lines with a client-side regex
 {
   "tool": "search_code",
   "arguments": {
     "workspace": "PROJ",
     "repository": "frontend-app",
-    "search_query": "useState",
-    "file_pattern": "*.tsx",  // Only search in .tsx files
-    "start": 0,
-    "limit": 25
+    "query": "useState",
+    "ext": "tsx",
+    "regex_filter": "^\\s*const\\s+\\[",
+    "case_variants": true
   }
 }
 ```
 
-Returns search results with:
-- File path and name
-- Repository and project information
-- Matched lines with:
-  - Line number
-  - Full line content
-  - Highlighted segments showing exact matches
-- Pagination information
+**Inputs**
 
-Example response:
+- `workspace` (required) — project key (e.g. `PROJ`).
+- `query` (required) — exact term or phrase. **No regex / wildcards / fuzzy match** at this layer (the Bitbucket index does not support them).
+- `repository` — repo slug. Omit to search all repos in the project.
+- `lang` — Bitbucket `lang:` modifier (e.g. `python`, `java`). One expression covers all extensions for the language.
+- `ext` — extension without dot (e.g. `tsx`). Use when `lang` is too broad.
+- `path` — subpath scope (Bitbucket `path:` modifier).
+- `exclude_terms` — array of terms to exclude (each becomes `-term`).
+- `archived` — `true` / `false` / `*` (default: active only).
+- `fork` — `true` / `false`.
+- `regex_filter` — client-side regex applied to returned hit lines as a post-filter; lets you narrow results without spending Bitbucket query budget.
+- `case_variants` — if true, also runs the query with snake_case ↔ camelCase converted and merges results (one extra API call).
+- `limit` (default 25) and `start` for pagination.
+
+**Bitbucket index limits to know about**
+
+- Punctuation other than `.` and `_` is stripped at index time. Including `=`, `(`, `:` in your `query` does not narrow it.
+- Case-insensitive. Single-character terms ignored.
+- Implicit AND between terms; OR / NOT / parentheses supported (operators **ALL CAPS**).
+- Hard caps: 250 characters total query, max 9 expressions, only files <512 KiB are indexed, only the default branch is indexed.
+
+When constructed clauses exceed the cap, optional clauses are dropped one-at-a-time in priority order (`exclude_terms` → `archived` → `fork` → `ext` → `lang` → `path` → `repo`) and a `QUERY_TRUNCATED` warning is emitted.
+
+**Output (dense JSON)**
+
 ```json
 {
-  "message": "Code search completed successfully",
-  "workspace": "PROJ",
-  "repository": "my-repo",
-  "search_query": "TODO",
-  "results": [
+  "query": "doSomething",
+  "filters": { "project": "PROJ", "repo": "my-repo" },
+  "engine": "bitbucket_index",
+  "total_files": 2,
+  "total_matches": 3,
+  "files": [
     {
-      "file_path": "src/utils/helper.js",
-      "file_name": "helper.js",
-      "repository": "my-repo",
-      "project": "PROJ",
+      "path": "src/lib/handler.ts",
       "matches": [
-        {
-          "line_number": 42,
-          "line_content": "    // TODO: Implement error handling",
-          "highlighted_segments": [
-            { "text": "    // ", "is_match": false },
-            { "text": "TODO", "is_match": true },
-            { "text": ": Implement error handling", "is_match": false }
-          ]
-        }
+        { "line": 17, "text": "  const result = await doSomething(payload);" },
+        { "line": 42, "text": "export function doSomething(input: Input) {" }
+      ]
+    },
+    {
+      "path": "tests/handler.test.ts",
+      "matches": [
+        { "line": 9, "text": "  expect(doSomething(sample)).toEqual(expected);" }
       ]
     }
   ],
-  "total_count": 15,
-  "start": 0,
-  "limit": 50,
-  "has_more": false
+  "warnings": [],
+  "next_start": null,
+  "diagnostics": {
+    "default_branch_only": true,
+    "expression_count": 3,
+    "query_length": 42,
+    "dropped_clauses": []
+  }
 }
 ```
 
-**Note**: This tool currently only works with Bitbucket Server. Bitbucket Cloud support is planned for a future release.
+Only lines that actually match are returned (no surrounding context unless explicitly requested by `regex_filter`). `total_files` and `total_matches` are distinct. `engine` is `bitbucket_index` for `search_code`.
+
+**Warnings to act on**
+
+- `INDEX_GAP_LIKELY` — Bitbucket returned zero hits but matching files exist. Switch to `find_in_files`. If a `lang:` filter was set, the warning calls it out specifically — Bitbucket may not recognize that language name.
+- `REGEX_FILTER_REJECTED_ALL` — Bitbucket returned hits but your `regex_filter` killed them all. Adjust or drop it.
+- `PROBE_UNAVAILABLE` — index returned zero AND the file-list probe could not run. Cannot tell whether the term is missing or the index has a gap.
+- `QUERY_TRUNCATED` — soft-degrade dropped optional clauses to fit Bitbucket caps; the dropped clauses are listed in `diagnostics.dropped_clauses`.
+- `DEPRECATED_PARAM` — old parameter names (`search_query`, `search_context`, `include_patterns`, `file_pattern`) still work but should be migrated.
+
+### Find in Files
+
+Content search by listing files and reading them through Bitbucket's raw endpoint. Slower than `search_code` (1 + N API calls), but supports full regex and works where the index has gaps (Haskell, feature branches, files Bitbucket's index missed). Bitbucket Server only.
+
+```typescript
+// Recover a function in files the index does not cover (e.g. an unindexed language)
+{
+  "tool": "find_in_files",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "filename_pattern": "src/**/*.hs",
+    "content_query": "doSomething"
+  }
+}
+
+// Search a feature branch
+{
+  "tool": "find_in_files",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "branch": "feat/new-thing",
+    "filename_pattern": "src/**/*.py",
+    "content_query": "^class\\s+Order"
+  }
+}
+```
+
+**Inputs**
+
+- `workspace`, `repository`, `content_query` (required). `content_query` is a JS regex (PCRE-style) applied line-by-line to file contents.
+- `filename_pattern` — glob to scope the file set. **Strongly recommended.** Without it, the tool fans out across the whole repo and is likely to truncate or trip rate limits.
+- `branch` — defaults to the default branch.
+- `regex_filter` — optional second regex applied as a post-filter on each candidate hit line.
+- `max_files` — hard cap on files fetched (default 3000). If exceeded, response includes `truncated: true` and (on zero matches) a `POSSIBLE_FALSE_NEGATIVE` warning.
+- `parallelism` — concurrent file fetches (default 4). Higher values risk rate-limiting; on `RATE_LIMITED` warning, lower this and narrow `filename_pattern`.
+- `limit` — max total hit lines (default 25).
+
+**Rate-limit awareness**
+
+`find_in_files` watches HTTP status codes during fan-out:
+- A single `429` aborts the scan immediately.
+- Three or more consecutive `403`s also abort (likely rate-limited rather than per-file permission).
+- A successful read between failures resets the counter.
+
+When aborted early, the response includes a `RATE_LIMITED` warning with `aborted_after` / total counts in `diagnostics`.
+
+**Output**
+
+Same dense JSON shape as `search_code`, with `engine: "find_in_files"` and `diagnostics` fields specific to fan-out:
+
+```json
+"diagnostics": {
+  "files_scanned": 16,
+  "files_attempted": 16,
+  "files_failed": 0,
+  "files_truncated": false,
+  "default_branch_only": false
+}
+```
+
+**Note**: Both `search_code` and `find_in_files` work only with Bitbucket Server. Bitbucket Cloud support is not planned.
 
 ### List Pull Requests
 

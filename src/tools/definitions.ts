@@ -547,7 +547,9 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'search_files',
-    description: 'Search for files by name or path pattern in a repository',
+    description:
+      'Lists files in a repository whose path matches a glob. Filename-only — does NOT search file contents. ' +
+      'For content search use search_code (index-backed) or find_in_files (file-fan-out).',
     group: 'files',
     availability: 'both',
     inputSchema: {
@@ -567,45 +569,81 @@ export const toolDefinitions: ToolDefinition[] = [
   // ── SEARCH (server_only) ──────────────────────────────────────────────────
   {
     name: 'search_code',
-    description: 'Search for code across Bitbucket Server repositories (Server only)',
+    description:
+      'Index-backed code search across Bitbucket Server. Fast, one API call. ' +
+      'USE WHEN: looking for an exact identifier or string in indexed default-branch content. ' +
+      'DO NOT USE WHEN: you need regex/wildcards/fuzzy match, the file is >512 KiB, you are searching a feature branch, or the language is not indexed — use find_in_files instead. ' +
+      'INDEX QUIRKS: punctuation other than . and _ is stripped at index time (so foo(, foo:, foo= all behave like bare foo); case-insensitive; single-character terms ignored; OR/NOT/parens supported (operators ALL CAPS); implicit AND between terms. ' +
+      'LIMITS: 250-char query, max 9 expressions, 512 KiB per file, default branch only. ' +
+      'On zero results, response may include warnings: ["INDEX_GAP_LIKELY..."] — switch to find_in_files. ' +
+      'Output is dense JSON with only matched lines (no surrounding context).',
     group: 'search',
     availability: 'server_only',
     inputSchema: {
       type: 'object',
       properties: {
         workspace: W,
-        repository: { type: 'string', description: 'Repo slug to search in (optional, searches all repos if omitted)' },
-        search_query: { type: 'string', description: 'Term or phrase to search for in code' },
-        search_context: {
-          type: 'string',
-          enum: ['assignment', 'declaration', 'usage', 'exact', 'any'],
-          description: 'Search context: assignment (x=y), declaration (defining x), usage (calling x), exact (quoted), any (all patterns, default)',
-        },
-        file_pattern: { type: 'string', description: 'File path filter, e.g. "*.java", "src/**/*.ts" (optional)' },
-        include_patterns: {
+        repository: { type: 'string', description: 'Repo slug. Omit to search all repos in the project.' },
+        query: { type: 'string', description: 'Term or phrase. No regex/wildcards/fuzzy. Punctuation other than . and _ is ignored at index time.' },
+        lang: { type: 'string', description: 'Bitbucket lang: modifier. One expression covers all extensions for the language; cheaper than ext:.' },
+        ext: { type: 'string', description: 'File extension without dot (e.g. tsx). Use when lang is too broad.' },
+        path: { type: 'string', description: 'Subpath scope (Bitbucket path: modifier). Use lang/ext for extension filtering.' },
+        exclude_terms: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Custom search patterns to include (optional)',
+          description: 'Terms to exclude. Each becomes a -term clause; counts toward the 9-expression budget.',
         },
-        limit: { type: 'number', description: 'Max results (default: 25)' },
+        archived: { type: 'string', enum: ['true', 'false', '*'], description: 'Filter by archive status. Default: only active repos.' },
+        fork: { type: 'string', enum: ['true', 'false'], description: 'Filter by fork status.' },
+        regex_filter: { type: 'string', description: 'Optional regex applied to returned hit lines as a client-side post-filter. Lets you narrow without spending Bitbucket query budget.' },
+        case_variants: { type: 'boolean', description: 'If true, also runs the query with snake_case ↔ camelCase converted and merges results. Costs one extra API call.' },
+        limit: { type: 'number', description: 'Max hits returned (default: 25).' },
         start: START,
       },
-      required: ['workspace', 'search_query'],
+      required: ['workspace', 'query'],
     },
   },
   {
-    name: 'search_repositories',
-    description: 'Search for repositories by name or description (Bitbucket Server only)',
+    name: 'find_in_files',
+    description:
+      'Content search by listing files and reading them. Slower than search_code (1 + N API calls) but supports full regex and works where the index has gaps. ' +
+      'USE WHEN: search_code returned INDEX_GAP_LIKELY, you need real regex, or the language/branch is not indexed. ' +
+      'DO NOT USE WHEN: search_code would work — it is far cheaper. ' +
+      'ALWAYS provide filename_pattern; without it the tool fans out across the whole repo and is likely to truncate. ' +
+      'Same dense JSON output shape as search_code; engine field is "find_in_files".',
     group: 'search',
     availability: 'server_only',
     inputSchema: {
       type: 'object',
       properties: {
-        search_query: { type: 'string', description: 'Repository name or keyword to search for' },
-        workspace: { type: 'string', description: 'Project key to filter search (optional)' },
-        limit: { type: 'number', description: 'Max results (default: 10)' },
+        workspace: W,
+        repository: R,
+        content_query: { type: 'string', description: 'Regex (PCRE-style) applied to each file\'s contents line-by-line. Anchor with ^/$ for line-level patterns.' },
+        filename_pattern: { type: 'string', description: 'Glob scoping the file set. Strongly recommended.' },
+        branch: BRANCH,
+        regex_filter: { type: 'string', description: 'Optional second regex applied to each candidate hit line as a post-filter.' },
+        max_files: { type: 'number', description: 'Hard cap on files fetched. Default 3000. If exceeded, response has truncated: true and (on zero matches) a POSSIBLE_FALSE_NEGATIVE warning.' },
+        parallelism: { type: 'number', description: 'Concurrent file fetches. Default 4. Higher values risk Bitbucket rate-limiting (429/403); on RATE_LIMITED warning, lower this and narrow filename_pattern.' },
+        limit: { type: 'number', description: 'Max total hit lines returned across all files (default: 25).' },
       },
-      required: ['search_query'],
+      required: ['workspace', 'repository', 'content_query'],
+    },
+  },
+  {
+    name: 'search_repositories',
+    description:
+      'Find repositories by name, slug, or description across the Bitbucket Server instance. ' +
+      'For finding code WITHIN a known repo, use search_code instead.',
+    group: 'search',
+    availability: 'server_only',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Repository name, slug, or keyword.' },
+        workspace: { type: 'string', description: 'Project key to scope the search (optional).' },
+        limit: { type: 'number', description: 'Max results (default: 10).' },
+      },
+      required: ['query'],
     },
   },
 
