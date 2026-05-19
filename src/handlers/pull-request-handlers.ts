@@ -399,7 +399,7 @@ export class PullRequestHandlers {
           });
         } else {
           // No reviewers provided - preserve existing reviewers with their full data
-          requestBody.reviewers = currentPr.reviewers;
+          requestBody.reviewers = (currentPr.reviewers || []);
         }
       } else {
         // Bitbucket Cloud API
