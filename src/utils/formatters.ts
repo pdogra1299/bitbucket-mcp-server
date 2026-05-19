@@ -27,12 +27,12 @@ export function formatServerResponse(
     destination_branch: pr.toRef.displayId,
     source_commit: pr.fromRef.latestCommit,
     destination_commit: pr.toRef.latestCommit,
-    reviewers: pr.reviewers.map(r => ({
+    reviewers: (pr.reviewers || []).map(r => ({
       name: r.user.displayName,
       approved: r.approved,
       status: r.status,
     })),
-    participants: pr.participants.map(p => ({
+    participants: (pr.participants || []).map(p => ({
       name: p.user.displayName,
       role: p.role,
       approved: p.approved,
@@ -59,8 +59,8 @@ export function formatCloudResponse(pr: BitbucketCloudPullRequest): any {
     author: pr.author.display_name,
     source_branch: pr.source.branch.name,
     destination_branch: pr.destination.branch.name,
-    reviewers: pr.reviewers.map(r => r.display_name),
-    participants: pr.participants.map(p => ({
+    reviewers: (pr.reviewers || []).map(r => r.display_name),
+    participants: (pr.participants || []).map(p => ({
       name: p.user.display_name,
       role: p.role,
       approved: p.approved,
@@ -88,7 +88,7 @@ export function formatServerPRListItem(pr: BitbucketServerPullRequest, baseUrl?:
     destination_branch: pr.toRef.displayId,
     updated_on: new Date(pr.updatedDate).toLocaleString(),
     web_url: webUrl,
-    reviewers: pr.reviewers.map(r => ({ name: r.user.displayName, approved: r.approved })),
+    reviewers: (pr.reviewers || []).map(r => ({ name: r.user.displayName, approved: r.approved })),
   };
 }
 
@@ -103,7 +103,7 @@ export function formatCloudPRListItem(pr: BitbucketCloudPullRequest): any {
     destination_branch: pr.destination.branch.name,
     updated_on: new Date(pr.updated_on).toLocaleString(),
     web_url: pr.links.html.href,
-    reviewers: pr.reviewers.map(r => r.display_name),
+    reviewers: (pr.reviewers || []).map(r => r.display_name),
   };
 }
 
@@ -116,7 +116,7 @@ export function formatServerCommit(commit: BitbucketServerCommit): FormattedComm
       name: commit.author.name,
     },
     date: new Date(commit.authorTimestamp).toISOString(),
-    is_merge_commit: commit.parents.length > 1,
+    is_merge_commit: (commit.parents || []).length > 1,
   };
 }
 
@@ -132,7 +132,7 @@ export function formatCloudCommit(commit: BitbucketCloudCommit): FormattedCommit
       name: authorName,
     },
     date: commit.date,
-    is_merge_commit: commit.parents.length > 1,
+    is_merge_commit: (commit.parents || []).length > 1,
   };
 }
 

@@ -286,11 +286,11 @@ export class BranchHandlers {
           destination_branch: pr.toRef.displayId,
           author: pr.author.user.displayName,
           created_on: new Date(pr.createdDate).toISOString(),
-          reviewers: pr.reviewers.map((r: any) => r.user.displayName),
+          reviewers: (pr.reviewers || []).map((r: any) => r.user.displayName),
           approval_status: {
-            approved_by: pr.reviewers.filter((r: any) => r.approved).map((r: any) => r.user.displayName),
-            changes_requested_by: pr.reviewers.filter((r: any) => r.status === 'NEEDS_WORK').map((r: any) => r.user.displayName),
-            pending: pr.reviewers.filter((r: any) => !r.approved && r.status !== 'NEEDS_WORK').map((r: any) => r.user.displayName)
+            approved_by: (pr.reviewers || []).filter((r: any) => r.approved).map((r: any) => r.user.displayName),
+            changes_requested_by: (pr.reviewers || []).filter((r: any) => r.status === 'NEEDS_WORK').map((r: any) => r.user.displayName),
+            pending: (pr.reviewers || []).filter((r: any) => !r.approved && r.status !== 'NEEDS_WORK').map((r: any) => r.user.displayName)
           },
           url: `${this.baseUrl}/projects/${workspace}/repos/${repository}/pull-requests/${pr.id}`
         }));
@@ -311,11 +311,11 @@ export class BranchHandlers {
           destination_branch: pr.destination.branch.name,
           author: pr.author.display_name,
           created_on: pr.created_on,
-          reviewers: pr.reviewers.map((r: any) => r.display_name),
+          reviewers: (pr.reviewers || []).map((r: any) => r.display_name),
           approval_status: {
-            approved_by: pr.participants.filter((p: any) => p.approved).map((p: any) => p.user.display_name),
+            approved_by: (pr.participants || []).filter((p: any) => p.approved).map((p: any) => p.user.display_name),
             changes_requested_by: [], // Cloud doesn't have explicit "changes requested" status
-            pending: pr.reviewers.filter((r: any) => !pr.participants.find((p: any) => p.user.account_id === r.account_id && p.approved))
+            pending: (pr.reviewers || []).filter((r: any) => !(pr.participants || []).find((p: any) => p.user.account_id === r.account_id && p.approved))
               .map((r: any) => r.display_name)
           },
           url: pr.links.html.href
@@ -342,7 +342,7 @@ export class BranchHandlers {
             id: pr.id,
             title: pr.title,
             merged_at: new Date(pr.updatedDate).toISOString(), // Using updated date as merge date
-            merged_by: pr.participants.find((p: any) => p.role === 'PARTICIPANT' && p.approved)?.user.displayName || 'Unknown'
+            merged_by: (pr.participants || []).find((p: any) => p.role === 'PARTICIPANT' && p.approved)?.user.displayName || 'Unknown'
           }));
         } else {
           // Bitbucket Cloud

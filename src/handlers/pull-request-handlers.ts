@@ -384,7 +384,7 @@ export class PullRequestHandlers {
           // User wants to update reviewers
           // Create a map of existing reviewers for preservation of approval status
           const existingReviewersMap = new Map(
-            currentPr.reviewers.map((r: any) => [r.user.name, r])
+            (currentPr.reviewers || []).map((r: any) => [r.user.name, r])
           );
           
           requestBody.reviewers = reviewers.map(username => {
