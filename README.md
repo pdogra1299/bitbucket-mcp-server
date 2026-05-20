@@ -213,7 +213,7 @@ Add the server to your MCP settings file (usually located at `~/.vscode-server/d
 
 Replace:
 - `/absolute/path/to/bitbucket-mcp-server` with the actual path to this directory
-- `your-username\` with your Bitbucket username (for Server) or Bitbucket email (for Cloud)
+- `your-username` with your Bitbucket username (for Server) or Bitbucket email (for Cloud)
 - `your-app-password` with the app password you created
 
 For Bitbucket Server, use:
