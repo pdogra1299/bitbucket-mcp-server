@@ -154,6 +154,44 @@ node scripts/setup-auth.js
 
 This will guide you through the authentication setup process.
 
+### Bitbucket Cloud Specifics
+
+For Bitbucket Cloud (api.bitbucket.org), authentication requires slightly different configuration than Bitbucket Server.
+
+#### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `BITBUCKET_USERNAME` | Yes | Your Bitbucket **email** (e.g., "user@example.com") |
+| `BITBUCKET_APP_PASSWORD` | Yes | App password created at https://bitbucket.org/account/settings/app-passwords/ |
+| `BITBUCKET_TOKEN` | No | Not used for Cloud — left empty or omitted |
+
+> **Note:** For Cloud, `BITBUCKET_USERNAME` must be your **email address**, not your Bitbucket username. This is different from Bitbucket Server which uses the full email as well but for different reasons.
+
+#### Example Configuration
+
+```json
+{
+  "mcpServers": {
+    "bitbucket": {
+      "command": "npx",
+      "args": ["-y", "@nexus2520/bitbucket-mcp-server"],
+      "env": {
+        "BITBUCKET_USERNAME": "your-email@example.com",
+        "BITBUCKET_APP_PASSWORD": "your-app-password"
+      }
+    }
+  }
+}
+```
+
+#### Common Pitfalls
+
+1. **Username vs Email**: Bitbucket Cloud requires your **account email** as `BITBUCKET_USERNAME`, not your display name or handle.
+2. **App Password Permissions**: Ensure the app password includes **Account: Read**, **Repositories: Read**, and **Pull requests: Read** at minimum.
+3. **Two-Factor Authentication**: If 2FA is enabled on your Bitbucket account, you must use an app password — your regular account password will not work.
+4. **Token is not for Cloud**: `BITBUCKET_TOKEN` is only used for Bitbucket Server HTTP access tokens. Leave it empty for Cloud.
+
 ## Configuration
 
 Add the server to your MCP settings file (usually located at `~/.vscode-server/data/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`):
@@ -175,7 +213,7 @@ Add the server to your MCP settings file (usually located at `~/.vscode-server/d
 
 Replace:
 - `/absolute/path/to/bitbucket-mcp-server` with the actual path to this directory
-- `your-username` with your Bitbucket username (not email)
+- `your-username\` with your Bitbucket username (for Server) or Bitbucket email (for Cloud)
 - `your-app-password` with the app password you created
 
 For Bitbucket Server, use:
