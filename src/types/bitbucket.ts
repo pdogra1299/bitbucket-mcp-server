@@ -230,14 +230,16 @@ export interface BitbucketCloudFileMetadata {
   size: number;
   encoding?: string;
   mimetype?: string;
+  type?: string;
+  attributes?: string[];
   links: {
     self: {
       href: string;
     };
-    html: {
+    meta?: {
       href: string;
     };
-    download: {
+    html?: {
       href: string;
     };
   };
