@@ -7,6 +7,7 @@ export type ToolGroup =
   | 'branches'
   | 'files'
   | 'search'
+  | 'attachments'
   | 'discovery';
 
 export type ToolAvailability = 'both' | 'server_only';
@@ -27,6 +28,32 @@ const TASK_ID = { type: 'number', description: 'Task ID' };
 const LIMIT = { type: 'number', description: 'Max results to return (default: 25)' };
 const START = { type: 'number', description: 'Pagination start index (default: 0)' };
 const BRANCH = { type: 'string', description: 'Branch name (default: default branch)' };
+const ATTACHMENTS = {
+  type: 'array',
+  description:
+    'Files to upload and embed in the comment/description. BITBUCKET SERVER / DATA CENTER ONLY ' +
+    '(Bitbucket Cloud has no public attachment API and will return an error). Each item is either a ' +
+    'local file path string, or an object { file_path, alt_text?, render? } where render is ' +
+    '"image" | "link" | "auto" (default "auto": images embed inline, other files as download links).',
+  items: {
+    oneOf: [
+      { type: 'string', description: 'Local file path, e.g. "/tmp/screenshot.png"' },
+      {
+        type: 'object',
+        properties: {
+          file_path: { type: 'string', description: 'Local file path' },
+          alt_text: { type: 'string', description: 'Alt text / link label (optional, defaults to filename)' },
+          render: {
+            type: 'string',
+            enum: ['image', 'link', 'auto'],
+            description: 'How to embed: image (inline), link (download link), or auto (default)',
+          },
+        },
+        required: ['file_path'],
+      },
+    ],
+  },
+};
 
 export const toolDefinitions: ToolDefinition[] = [
 
@@ -87,6 +114,7 @@ export const toolDefinitions: ToolDefinition[] = [
           type: 'boolean',
           description: 'Close source branch after merge (optional, default: false)',
         },
+        attachments: ATTACHMENTS,
       },
       required: ['workspace', 'repository', 'title', 'source_branch', 'destination_branch'],
     },
@@ -110,6 +138,7 @@ export const toolDefinitions: ToolDefinition[] = [
           items: { type: 'string' },
           description: 'New reviewer list. Replaces existing reviewers but preserves approval status. Omit to keep existing reviewers (optional)',
         },
+        attachments: ATTACHMENTS,
       },
       required: ['workspace', 'repository', 'pull_request_id'],
     },
@@ -190,6 +219,7 @@ export const toolDefinitions: ToolDefinition[] = [
           enum: ['strict', 'best'],
           description: 'How to handle multiple code_snippet matches. "strict": error with all matches. "best": auto-pick highest confidence. Default: strict',
         },
+        attachments: ATTACHMENTS,
       },
       required: ['workspace', 'repository', 'pull_request_id', 'comment_text'],
     },
@@ -208,6 +238,37 @@ export const toolDefinitions: ToolDefinition[] = [
         comment_id: { type: 'number', description: 'Comment ID to delete' },
       },
       required: ['workspace', 'repository', 'pull_request_id', 'comment_id'],
+    },
+  },
+
+  // ── ATTACHMENTS (server_only) ─────────────────────────────────────────────
+  {
+    name: 'manage_attachments',
+    description:
+      'Manage existing repository attachments (Bitbucket Server / Data Center only). ' +
+      'action "download": fetch the file bytes by numeric attachment id (returns text inline, or an image as an image block). ' +
+      'action "delete": remove an attachment by numeric id (requires REPO_ADMIN). ' +
+      'To UPLOAD and embed new files, use the "attachments" parameter on add_comment / create_pull_request / update_pull_request instead — not this tool. ' +
+      'There is no "list" action: Bitbucket exposes no attachment-listing API.',
+    group: 'attachments',
+    availability: 'server_only',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: W,
+        repository: R,
+        action: {
+          type: 'string',
+          enum: ['download', 'delete'],
+          description: 'download: fetch the file bytes; delete: remove the attachment (REPO_ADMIN)',
+        },
+        attachment_id: {
+          type: 'string',
+          description:
+            'Numeric attachment id — the trailing number of an attachment:N/M reference (e.g. "3" from attachment:1/3), or the id returned by an upload.',
+        },
+      },
+      required: ['workspace', 'repository', 'action', 'attachment_id'],
     },
   },
 

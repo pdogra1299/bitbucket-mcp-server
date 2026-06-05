@@ -2,6 +2,8 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { BitbucketApiClient } from '../utils/api-client.js';
 import { formatServerResponse, formatCloudResponse, formatServerPRListItem, formatCloudPRListItem, formatServerCommit, formatCloudCommit } from '../utils/formatters.js';
 import { formatSuggestionComment } from '../utils/suggestion-formatter.js';
+import { appendAttachments, buildAttachmentMarkup } from '../utils/attachment-formatter.js';
+import { existsSync } from 'fs';
 import { DiffParser } from '../utils/diff-parser.js';
 import { 
   BitbucketServerPullRequest, 
@@ -34,7 +36,8 @@ import {
   isTaskIdArgs,
   isConvertCommentToTaskArgs,
   isSetPrTaskStatusArgs,
-  isConvertPrItemArgs
+  isConvertPrItemArgs,
+  AttachmentInput
 } from '../types/guards.js';
 
 export class PullRequestHandlers {
@@ -43,6 +46,54 @@ export class PullRequestHandlers {
     private baseUrl: string,
     private username: string
   ) {}
+
+  /**
+   * Upload each attachment (Bitbucket Server / Data Center only) and append the
+   * resulting Markdown references to a comment body / PR description.
+   * Returns the body unchanged when there are no attachments.
+   */
+  private async uploadAndEmbed(
+    workspace: string,
+    repository: string,
+    body: string,
+    attachments?: AttachmentInput[]
+  ): Promise<string> {
+    if (!attachments || attachments.length === 0) {
+      return body;
+    }
+    if (!this.apiClient.getIsServer()) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Attachments are only supported on Bitbucket Server / Data Center. ' +
+          'Bitbucket Cloud has no public REST API for attaching files to pull requests or comments.'
+      );
+    }
+
+    const markups: string[] = [];
+    for (const item of attachments) {
+      const filePath = typeof item === 'string' ? item : item.file_path;
+      const altText = typeof item === 'string' ? undefined : item.alt_text;
+      const render = typeof item === 'string' ? 'auto' : item.render || 'auto';
+
+      if (!filePath) {
+        throw new McpError(ErrorCode.InvalidParams, 'Each attachment requires a file_path');
+      }
+      if (!existsSync(filePath)) {
+        throw new McpError(ErrorCode.InvalidParams, `Attachment file not found: ${filePath}`);
+      }
+
+      const uploaded = await this.apiClient.uploadAttachment(workspace, repository, filePath);
+      if (!uploaded.ref) {
+        throw new McpError(
+          ErrorCode.InternalError,
+          `Attachment "${uploaded.name}" uploaded but no reference was returned to embed it`
+        );
+      }
+      markups.push(buildAttachmentMarkup(uploaded.ref, altText || uploaded.name, render));
+    }
+
+    return appendAttachments(body, markups);
+  }
 
   private async getFilteredPullRequestDiff(
     workspace: string,
@@ -268,9 +319,13 @@ export class PullRequestHandlers {
       );
     }
 
-    const { workspace, repository, title, source_branch, destination_branch, description, reviewers, close_source_branch } = args;
+    const { workspace, repository, title, source_branch, destination_branch, description, reviewers, close_source_branch, attachments } = args;
 
     try {
+      // Upload any attachments and embed their references into the description (Server only).
+      // Attachments are repo-scoped, so they can be uploaded before the PR exists.
+      const finalDescription = await this.uploadAndEmbed(workspace, repository, description || '', attachments);
+
       let apiPath: string;
       let requestBody: any;
 
@@ -279,7 +334,7 @@ export class PullRequestHandlers {
         apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests`;
         requestBody = {
           title,
-          description: description || '',
+          description: finalDescription,
           fromRef: {
             id: `refs/heads/${source_branch}`,
             repository: {
@@ -305,7 +360,7 @@ export class PullRequestHandlers {
         apiPath = `/repositories/${workspace}/${repository}/pullrequests`;
         requestBody = {
           title,
-          description: description || '',
+          description: finalDescription,
           source: {
             branch: {
               name: source_branch
@@ -351,7 +406,7 @@ export class PullRequestHandlers {
       );
     }
 
-    const { workspace, repository, pull_request_id, title, description, destination_branch, reviewers } = args;
+    const { workspace, repository, pull_request_id, title, description, destination_branch, reviewers, attachments } = args;
 
     try {
       let apiPath: string;
@@ -366,7 +421,12 @@ export class PullRequestHandlers {
         
         requestBody.version = currentPr.version;
         if (title !== undefined) requestBody.title = title;
-        if (description !== undefined) requestBody.description = description;
+        // Embed attachments into the description (Server only). When only attachments are
+        // provided (no description), append to the existing PR description instead of wiping it.
+        if (attachments?.length || description !== undefined) {
+          const baseDescription = description !== undefined ? description : (currentPr.description || '');
+          requestBody.description = await this.uploadAndEmbed(workspace, repository, baseDescription, attachments);
+        }
         if (destination_branch !== undefined) {
           requestBody.toRef = {
             id: `refs/heads/${destination_branch}`,
@@ -404,9 +464,12 @@ export class PullRequestHandlers {
       } else {
         // Bitbucket Cloud API
         apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}`;
-        
+
         if (title !== undefined) requestBody.title = title;
-        if (description !== undefined) requestBody.description = description;
+        if (attachments?.length || description !== undefined) {
+          // uploadAndEmbed throws a clear "Server only" error on Cloud when attachments are present
+          requestBody.description = await this.uploadAndEmbed(workspace, repository, description || '', attachments);
+        }
         if (destination_branch !== undefined) {
           requestBody.destination = {
             branch: {
@@ -462,7 +525,8 @@ export class PullRequestHandlers {
       suggestion_end_line,
       code_snippet,
       search_context,
-      match_strategy = 'strict'
+      match_strategy = 'strict',
+      attachments
     } = args;
 
     let sequentialPosition: number | undefined;
@@ -506,6 +570,9 @@ export class PullRequestHandlers {
     }
 
     try {
+      // Upload any attachments and embed their references into the comment body (Server only)
+      finalCommentText = await this.uploadAndEmbed(workspace, repository, finalCommentText, attachments);
+
       let apiPath: string;
       let requestBody: any;
 

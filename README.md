@@ -18,8 +18,12 @@ An MCP (Model Context Protocol) server that provides tools for interacting with 
 - `decline_pull_request` - Decline/reject a pull request
 
 #### PR Comments (`pr_comments`)
-- `add_comment` - Add general, inline, threaded, or suggestion comments to a PR
+- `add_comment` - Add general, inline, threaded, or suggestion comments to a PR (supports `attachments`, Server only)
 - `delete_comment` - Delete a comment from a pull request
+
+#### Attachments — Bitbucket Server only (`attachments`)
+- `manage_attachments` - Download (`action: "download"`) or delete (`action: "delete"`) an existing repository attachment by numeric id
+- To **upload** a file, pass the `attachments` parameter to `add_comment`, `create_pull_request`, or `update_pull_request` (see [Attachments](#attachments)). There is no list operation — Bitbucket exposes no attachment-listing API.
 
 #### Code Review (`pr_review`)
 - `get_pull_request_diff` - Structured line-by-line diff with ADDED/REMOVED/CONTEXT types
@@ -209,6 +213,7 @@ Reduce the number of tools sent to the LLM on every request by setting `BITBUCKE
 |---|---|---|
 | `pr_core` | `get_pull_request`, `list_pull_requests`, `create_pull_request`, `update_pull_request`, `merge_pull_request`, `decline_pull_request` | Both |
 | `pr_comments` | `add_comment`, `delete_comment` | Both |
+| `attachments` | `manage_attachments` | Server only |
 | `pr_review` | `get_pull_request_diff`, `set_pr_approval`, `set_review_status` | Both |
 | `pr_tasks` | `list_pr_tasks`, `create_pr_task`, `update_pr_task`, `set_pr_task_status`, `delete_pr_task`, `convert_pr_item` | Server only |
 | `commits` | `list_pr_commits`, `list_branch_commits`, `get_commit_detail` | Both |
@@ -2021,6 +2026,71 @@ Returns all tasks with their status:
 - Tasks can be in `OPEN` or `RESOLVED` state
 - Only the task creator, PR author, or repository admin can edit text or delete tasks
 - Anyone with read access can mark tasks as done/undone
+
+## Attachments
+
+**Bitbucket Server / Data Center only.** Bitbucket Cloud has no public REST API for attaching
+files to pull requests or comments, so any use of the `attachments` parameter or the
+`manage_attachments` tool on a Cloud connection returns a clear error.
+
+### Uploading & embedding
+
+Pass an `attachments` array to `add_comment`, `create_pull_request`, or `update_pull_request`.
+Each file is uploaded to the repository, and a Markdown reference (`attachment:N/M`) is appended
+to the comment body / PR description automatically. Each item is either a **local file path string**
+or an object `{ file_path, alt_text?, render? }`:
+
+- `render: "image"` → embeds inline as `![alt](attachment:N/M)`
+- `render: "link"` → embeds as a download link `[alt](attachment:N/M)`
+- `render: "auto"` (default) → image for image file types, otherwise a link
+
+```json
+{
+  "tool": "add_comment",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 42,
+    "comment_text": "Here's the crash I'm seeing:",
+    "attachments": ["/tmp/screenshot.png"]
+  }
+}
+```
+
+```json
+{
+  "tool": "update_pull_request",
+  "arguments": {
+    "workspace": "PROJ",
+    "repository": "my-repo",
+    "pull_request_id": 42,
+    "attachments": [
+      { "file_path": "/tmp/architecture.png", "alt_text": "Architecture", "render": "image" },
+      { "file_path": "/tmp/report.csv", "render": "link" }
+    ]
+  }
+}
+```
+
+When only `attachments` are supplied to `update_pull_request` (no `description`), the references are
+**appended** to the PR's existing description rather than replacing it.
+
+### Downloading & deleting
+
+Use `manage_attachments` with the **numeric** attachment id (the trailing number of an
+`attachment:N/M` reference, e.g. `3` from `attachment:1/3`):
+
+```json
+{ "tool": "manage_attachments", "arguments": { "workspace": "PROJ", "repository": "my-repo", "action": "download", "attachment_id": "3" } }
+{ "tool": "manage_attachments", "arguments": { "workspace": "PROJ", "repository": "my-repo", "action": "delete", "attachment_id": "3" } }
+```
+
+`download` returns text inline, images as an image block, and a metadata summary for other types.
+`delete` requires `REPO_ADMIN`. There is no `list` action — Bitbucket exposes no attachment-listing API.
+
+> **Note:** Bitbucket's attachment **upload** endpoint is private/undocumented (the download/delete
+> endpoints are documented). It works on Bitbucket Server/Data Center 7.x+; the server tolerates the
+> two known upload path variants and may change in future Bitbucket releases.
 
 ## Development
 

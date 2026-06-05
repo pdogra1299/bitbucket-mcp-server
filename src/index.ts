@@ -15,6 +15,7 @@ import { ReviewHandlers } from './handlers/review-handlers.js';
 import { FileHandlers } from './handlers/file-handlers.js';
 import { SearchHandlers } from './handlers/search-handlers.js';
 import { ProjectHandlers } from './handlers/project-handlers.js';
+import { AttachmentHandlers } from './handlers/attachment-handlers.js';
 import { toolDefinitions, ToolGroup } from './tools/definitions.js';
 
 // Get environment variables
@@ -44,12 +45,13 @@ class BitbucketMCPServer {
   private fileHandlers: FileHandlers;
   private searchHandlers: SearchHandlers;
   private projectHandlers: ProjectHandlers;
+  private attachmentHandlers: AttachmentHandlers;
 
   constructor() {
     this.server = new Server(
       {
         name: 'bitbucket-mcp-server',
-        version: '2.1.0',
+        version: '2.2.0',
       },
       {
         capabilities: {
@@ -77,6 +79,7 @@ class BitbucketMCPServer {
     this.fileHandlers = new FileHandlers(this.apiClient, BITBUCKET_BASE_URL);
     this.searchHandlers = new SearchHandlers(this.apiClient, BITBUCKET_BASE_URL);
     this.projectHandlers = new ProjectHandlers(this.apiClient, BITBUCKET_BASE_URL);
+    this.attachmentHandlers = new AttachmentHandlers(this.apiClient, BITBUCKET_BASE_URL);
 
     this.setupToolHandlers();
 
@@ -127,6 +130,10 @@ class BitbucketMCPServer {
           return this.pullRequestHandlers.handleDeclinePullRequest(request.params.arguments);
         case 'delete_comment':
           return this.pullRequestHandlers.handleDeleteComment(request.params.arguments);
+
+        // Attachment tools
+        case 'manage_attachments':
+          return this.attachmentHandlers.handleManageAttachments(request.params.arguments);
 
         // PR Task tools
         case 'list_pr_tasks':

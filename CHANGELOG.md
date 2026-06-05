@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-06-05
+
+### Added
+
+- **File attachments (Bitbucket Server / Data Center only).** Upload local files and embed them in PR comments and descriptions:
+  - New **`attachments`** parameter on `add_comment`, `create_pull_request`, and `update_pull_request`. Each item is a local file path string or `{ file_path, alt_text?, render? }`. Files are uploaded to the repository and a Markdown reference (`attachment:N/M`) is appended automatically — `render: "image"` embeds inline (`![alt](…)`), `"link"` embeds a download link, `"auto"` (default) picks based on file type. For `update_pull_request`, attachments-only updates append to the existing description instead of replacing it.
+  - New **`manage_attachments`** tool (new `attachments` tool group, Server only) with `action: "download"` (returns text/image/metadata by numeric id) and `action: "delete"` (by numeric id, requires `REPO_ADMIN`). No `list` action — Bitbucket exposes no attachment-listing API.
+  - **Bitbucket Cloud** has no public attachment API; using `attachments` or `manage_attachments` on a Cloud connection returns a clear, explanatory error.
+
+### Changed
+
+- **API client** gained multipart upload (`uploadAttachment`) and binary download (`downloadAttachment`) support; previously the client was JSON-only. The upload posts to the prefix-less `/projects/{key}/repos/{slug}/attachments` path (the servlet that actually accepts uploads on Bitbucket DC), falling back to the `/rest/api/1.0/...` form, and sends `Accept: */*` — verified against a live Bitbucket Data Center instance where axios's default `Accept` header is rejected with HTTP 405 by the fronting proxy. Download/delete use the documented `/rest/api/1.0/.../attachments/{id}` resource (delete requires `REPO_ADMIN`).
+- Added `form-data` as a direct dependency (previously only transitive via axios).
+
 ## [2.1.0] - 2026-05-10
 
 ### Added

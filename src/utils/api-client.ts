@@ -1,4 +1,7 @@
 import axios, { AxiosInstance, AxiosError } from 'axios';
+import FormData from 'form-data';
+import { createReadStream } from 'fs';
+import { basename } from 'path';
 import { BitbucketServerBuildSummary } from '../types/bitbucket.js';
 
 export interface ApiError {
@@ -6,6 +9,15 @@ export interface ApiError {
   message: string;
   isAxiosError: boolean;
   originalError?: AxiosError;
+}
+
+export interface UploadedAttachment {
+  /** Numeric attachment id used by the download/delete endpoints. */
+  id: string;
+  /** The `attachment:N/M` token used inside Markdown to embed the file. */
+  ref: string;
+  name: string;
+  url?: string;
 }
 
 export class BitbucketApiClient {
@@ -135,6 +147,123 @@ export class BitbucketApiClient {
 
   getIsServer(): boolean {
     return this.isServer;
+  }
+
+  // Normalize an error from a raw axios call into the same ApiError shape that
+  // makeRequest throws, so handlers' handleApiError() works consistently.
+  private throwApiError(error: unknown): never {
+    if (axios.isAxiosError(error)) {
+      const status = error.response?.status;
+      const respData: any = error.response?.data;
+      let message: string = error.message;
+      // respData may be a Buffer for binary (download) responses — guard before reading fields.
+      if (respData && typeof respData === 'object' && !Buffer.isBuffer(respData)) {
+        message =
+          respData?.errors?.[0]?.message ||
+          respData?.error?.message ||
+          respData?.message ||
+          error.message;
+      }
+      throw { status, message, isAxiosError: true, originalError: error } as ApiError;
+    }
+    throw error;
+  }
+
+  /**
+   * Upload a file as a repository attachment (Bitbucket Server / Data Center only).
+   * Returns the numeric id (for download/delete) and the `attachment:N/M` ref (for Markdown embeds).
+   *
+   * Note: the upload POST is private/undocumented API. Some instances reject the
+   * `/rest/api/1.0/...` path with 404/405, so we fall back to the prefix-less
+   * `/projects/...` path shown in Atlassian's KB example.
+   */
+  async uploadAttachment(
+    project: string,
+    repository: string,
+    filePath: string,
+    fileName?: string
+  ): Promise<UploadedAttachment> {
+    const name = fileName || basename(filePath);
+    const config = (form: FormData) => ({
+      headers: {
+        ...form.getHeaders(), // multipart/form-data; boundary=... — overrides the default JSON content-type
+        'X-Atlassian-Token': 'no-check',
+        // The attachment-upload servlet is picky: axios's default
+        // `Accept: application/json, text/plain, */*` is rejected with 405 by some
+        // proxies fronting Bitbucket. Plain `*/*` is accepted (matches curl's default).
+        Accept: '*/*',
+      },
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    });
+    const newForm = () => {
+      const form = new FormData();
+      form.append('files', createReadStream(filePath), { filename: name });
+      return form;
+    };
+
+    // The documented upload path is the prefix-less `/projects/.../attachments`
+    // (served by a servlet, not the REST plugin). Fall back to the `/rest/api/1.0`
+    // form for instances/versions that expose it there instead.
+    const primaryPath = `/projects/${project}/repos/${repository}/attachments`;
+    const fallbackPath = `/rest/api/1.0/projects/${project}/repos/${repository}/attachments`;
+
+    let data: any;
+    try {
+      const form = newForm();
+      data = (await this.axiosInstance.post(primaryPath, form, config(form))).data;
+    } catch (error) {
+      if (axios.isAxiosError(error) && (error.response?.status === 404 || error.response?.status === 405)) {
+        try {
+          const form = newForm();
+          data = (await this.axiosInstance.post(fallbackPath, form, config(form))).data;
+        } catch (fallbackError) {
+          this.throwApiError(fallbackError);
+        }
+      } else {
+        this.throwApiError(error);
+      }
+    }
+
+    // The response wrapper is not byte-stable across versions — parse defensively.
+    const att = data?.attachments?.[0] ?? (Array.isArray(data) ? data[0] : data);
+    if (!att || (att.id === undefined && !att?.links?.attachment?.href)) {
+      throw {
+        status: undefined,
+        message: 'Attachment uploaded but the response could not be parsed for an id/reference',
+        isAxiosError: false,
+      } as ApiError;
+    }
+    const ref: string | undefined = att?.links?.attachment?.href;
+    return {
+      id: att.id !== undefined ? String(att.id) : '',
+      ref: ref || (att.id !== undefined ? `attachment:${att.id}` : ''),
+      name: att.name || name,
+      url: att?.links?.self?.href || att.url,
+    };
+  }
+
+  /**
+   * Download a repository attachment's raw bytes (Bitbucket Server / Data Center only).
+   * Uses a per-request arraybuffer response so the binary content and content-type are preserved.
+   */
+  async downloadAttachment(
+    project: string,
+    repository: string,
+    attachmentId: string
+  ): Promise<{ data: Buffer; contentType: string }> {
+    try {
+      const response = await this.axiosInstance.get(
+        `/rest/api/1.0/projects/${project}/repos/${repository}/attachments/${attachmentId}`,
+        { responseType: 'arraybuffer', headers: { Accept: '*/*' } }
+      );
+      return {
+        data: Buffer.from(response.data),
+        contentType: (response.headers['content-type'] as string) || 'application/octet-stream',
+      };
+    } catch (error) {
+      this.throwApiError(error);
+    }
   }
 
   async getBuildSummaries(

@@ -1,4 +1,24 @@
 // Type guards for tool arguments
+
+// An attachment input is either a bare local file path, or an object that can
+// also carry an optional alt text and a render hint (image/link/auto).
+export type AttachmentInput =
+  | string
+  | { file_path: string; alt_text?: string; render?: 'image' | 'link' | 'auto' };
+
+const isValidAttachments = (value: any): boolean =>
+  value === undefined ||
+  (Array.isArray(value) &&
+    value.every(
+      (el: any) =>
+        typeof el === 'string' ||
+        (typeof el === 'object' &&
+          el !== null &&
+          typeof el.file_path === 'string' &&
+          (el.alt_text === undefined || typeof el.alt_text === 'string') &&
+          (el.render === undefined || ['image', 'link', 'auto'].includes(el.render)))
+    ));
+
 export const isGetPullRequestArgs = (
   args: any
 ): args is { workspace: string; repository: string; pull_request_id: number } =>
@@ -38,6 +58,7 @@ export const isCreatePullRequestArgs = (
   description?: string;
   reviewers?: string[];
   close_source_branch?: boolean;
+  attachments?: AttachmentInput[];
 } =>
   typeof args === 'object' &&
   args !== null &&
@@ -48,7 +69,8 @@ export const isCreatePullRequestArgs = (
   typeof args.destination_branch === 'string' &&
   (args.description === undefined || typeof args.description === 'string') &&
   (args.reviewers === undefined || Array.isArray(args.reviewers)) &&
-  (args.close_source_branch === undefined || typeof args.close_source_branch === 'boolean');
+  (args.close_source_branch === undefined || typeof args.close_source_branch === 'boolean') &&
+  isValidAttachments(args.attachments);
 
 export const isUpdatePullRequestArgs = (
   args: any
@@ -60,6 +82,7 @@ export const isUpdatePullRequestArgs = (
   description?: string;
   destination_branch?: string;
   reviewers?: string[];
+  attachments?: AttachmentInput[];
 } =>
   typeof args === 'object' &&
   args !== null &&
@@ -69,7 +92,8 @@ export const isUpdatePullRequestArgs = (
   (args.title === undefined || typeof args.title === 'string') &&
   (args.description === undefined || typeof args.description === 'string') &&
   (args.destination_branch === undefined || typeof args.destination_branch === 'string') &&
-  (args.reviewers === undefined || Array.isArray(args.reviewers));
+  (args.reviewers === undefined || Array.isArray(args.reviewers)) &&
+  isValidAttachments(args.attachments);
 
 export const isAddCommentArgs = (
   args: any
@@ -90,6 +114,7 @@ export const isAddCommentArgs = (
     after?: string[];
   };
   match_strategy?: 'strict' | 'best';
+  attachments?: AttachmentInput[];
 } =>
   typeof args === 'object' &&
   args !== null &&
@@ -97,6 +122,7 @@ export const isAddCommentArgs = (
   typeof args.repository === 'string' &&
   typeof args.pull_request_id === 'number' &&
   typeof args.comment_text === 'string' &&
+  isValidAttachments(args.attachments) &&
   (args.parent_comment_id === undefined || typeof args.parent_comment_id === 'number') &&
   (args.file_path === undefined || typeof args.file_path === 'string') &&
   (args.line_number === undefined || typeof args.line_number === 'number') &&
@@ -607,3 +633,19 @@ export const isConvertPrItemArgs = (
   typeof args.pull_request_id === 'number' &&
   typeof args.id === 'number' &&
   (args.direction === 'to_task' || args.direction === 'to_comment');
+
+// Attachment management (Bitbucket Server / Data Center only)
+export const isManageAttachmentsArgs = (
+  args: any
+): args is {
+  workspace: string;
+  repository: string;
+  action: 'download' | 'delete';
+  attachment_id: string | number;
+} =>
+  typeof args === 'object' &&
+  args !== null &&
+  typeof args.workspace === 'string' &&
+  typeof args.repository === 'string' &&
+  (args.action === 'download' || args.action === 'delete') &&
+  (typeof args.attachment_id === 'string' || typeof args.attachment_id === 'number');
