@@ -12,7 +12,21 @@ import {
   QueryClause,
   quoteIfNeeded,
 } from '../utils/query-budget.js';
+import { listRepoFiles } from '../utils/file-list.js';
 import { minimatch } from 'minimatch';
+
+// Self-imposed scan knobs, overridable per deployment. These are deliberate
+// courtesy limits toward the Bitbucket instance — not Bitbucket-mandated.
+const DEFAULT_PARALLELISM = intFromEnv('BITBUCKET_DEFAULT_PARALLELISM', 4);
+const MAX_PARALLELISM = intFromEnv('BITBUCKET_MAX_PARALLELISM', 20);
+const DEFAULT_MAX_SCAN_FILES = intFromEnv('BITBUCKET_MAX_SCAN_FILES', 3000);
+
+function intFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
 
 // Match ASCII letters, digits, underscores. Used for word-boundary checks in
 // the optional regex_filter post-filter (we do not bake any language knowledge
@@ -280,14 +294,15 @@ export class SearchHandlers {
         filename_pattern,
         branch,
         regex_filter,
-        max_files = 3000,
-        parallelism = 4,
+        max_files = DEFAULT_MAX_SCAN_FILES,
+        parallelism = DEFAULT_PARALLELISM,
         limit = 25,
       } = args;
 
       if (!workspace || !repository || !content_query) {
         throw new Error('workspace, repository, and content_query are required');
       }
+      const effectiveParallelism = Math.max(1, Math.min(parallelism, MAX_PARALLELISM));
 
       let contentRe: RegExp;
       try {
@@ -298,8 +313,8 @@ export class SearchHandlers {
       const filterFn = compileRegexFilter(regex_filter);
 
       // 1) List files matching the glob using the same logic as search_files.
-      const allFiles = await this.listFiles(workspace, repository, branch);
-      const candidates = filterFilesByGlob(allFiles, filename_pattern);
+      const listing = await listRepoFiles(this.apiClient, workspace, repository, { branch });
+      const candidates = filterFilesByGlob(listing.files, filename_pattern);
       const truncated = candidates.length > max_files;
       const toScan = candidates.slice(0, max_files);
 
@@ -307,7 +322,7 @@ export class SearchHandlers {
       // separately so silent-zero results do not mislead the caller.
       const scan = await scanFilesConcurrent({
         files: toScan,
-        parallelism,
+        parallelism: effectiveParallelism,
         fetchContent: (filePath) => this.fetchRawContent(workspace, repository, filePath, branch),
         contentRe,
         filterFn,
@@ -327,7 +342,15 @@ export class SearchHandlers {
         totalMatches += slice.length;
       }
 
+      const permissionFailures = scan.failures.filter(f => f.status === 403);
+      const otherFailures = scan.failures.filter(f => f.status !== 403 && f.status !== 429);
+
       const warningsOut: string[] = [];
+      if (listing.truncated) {
+        warningsOut.push(
+          `FILE_LIST_TRUNCATED: the repository file listing hit the pagination safety cap; files beyond the first ${listing.files.length} were not listed and could not be scanned. Narrow with filename_pattern on a subdirectory.`
+        );
+      }
       if (truncated) {
         warningsOut.push(
           `FILES_TRUNCATED: ${candidates.length} files matched the glob; only the first ${max_files} were scanned. Narrow filename_pattern.`
@@ -341,13 +364,20 @@ export class SearchHandlers {
       }
       if (scan.rate_limited) {
         warningsOut.push(
-          `RATE_LIMITED: Bitbucket returned 429/403 mid-scan and the rest of the file list was not attempted (${filesAttempted}/${toScan.length} files attempted). ` +
+          `RATE_LIMITED: Bitbucket returned 429 and kept throttling after ${RATE_LIMIT_MAX_ATTEMPTS} attempts; the rest of the file list was not attempted (${filesAttempted}/${toScan.length} files attempted). ` +
             `Wait a minute, then narrow filename_pattern and/or lower parallelism before retrying.`
         );
-      } else if (scan.failures.length > 0) {
-        const sample = scan.failures.slice(0, 3).map(f => f.path).join(', ');
+      }
+      if (permissionFailures.length > 0) {
+        const sample = permissionFailures.slice(0, 3).map(f => f.path).join(', ');
         warningsOut.push(
-          `FETCH_FAILURES: ${scan.failures.length} of ${filesAttempted} files failed to read (network, transient, or binary content). ` +
+          `PERMISSION_DENIED: ${permissionFailures.length} file(s) returned 403 (no read permission) and were skipped; the scan continued past them. Sample: ${sample}.`
+        );
+      }
+      if (otherFailures.length > 0) {
+        const sample = otherFailures.slice(0, 3).map(f => f.path).join(', ');
+        warningsOut.push(
+          `FETCH_FAILURES: ${otherFailures.length} of ${filesAttempted} files failed to read (network, transient, or binary content). ` +
             `Sample: ${sample}. ` +
             (totalMatches === 0
               ? `Zero matches may be a false negative — narrow filename_pattern or lower parallelism.`
@@ -374,7 +404,9 @@ export class SearchHandlers {
           files_scanned: filesSucceeded,
           files_attempted: filesAttempted,
           files_failed: scan.failures.length,
+          files_permission_denied: permissionFailures.length,
           files_truncated: truncated,
+          parallelism: effectiveParallelism,
           default_branch_only: !branch,
         },
       };
@@ -460,7 +492,7 @@ export class SearchHandlers {
     path: string | undefined
   ): Promise<{ matching_files: number; unavailable?: false; has_filter: boolean } | { unavailable: true; error: string; matching_files: 0; has_filter: false }> {
     try {
-      const all = await this.listFiles(workspace, repository, undefined);
+      const all = (await listRepoFiles(this.apiClient, workspace, repository)).files;
       const hasFilter = Boolean(ext || path);
       const glob = ext ? `**/*.${ext}` : path ? `${path.replace(/\/$/, '')}/**` : null;
       const matched = glob ? filterFilesByGlob(all, glob) : all;
@@ -468,16 +500,6 @@ export class SearchHandlers {
     } catch (err: any) {
       return { unavailable: true, error: err?.message ?? String(err), matching_files: 0, has_filter: false };
     }
-  }
-
-  private async listFiles(workspace: string, repository: string, branch?: string): Promise<string[]> {
-    const apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/files`;
-    const params: any = { limit: 100000 };
-    if (branch) params.at = `refs/heads/${branch}`;
-    const resp = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
-    if (Array.isArray(resp)) return resp;
-    if (resp?.values) return resp.values;
-    return [];
   }
 
   private async fetchRawContent(
@@ -549,20 +571,36 @@ function mergeIndexResponses(a: DenseSearchResponse, b: DenseSearchResponse): De
 
 interface ScanOutcome {
   results: Array<{ path: string; matches: Array<{ line: number; text: string }> }>;
-  failures: Array<{ path: string; error: string }>;
+  failures: Array<{ path: string; error: string; status?: number }>;
   rate_limited: boolean;
   aborted_after: number; // number of files attempted before early-abort (or total if not aborted)
 }
 
-// Threshold of consecutive 403s before we treat them as rate-limiting rather
-// than per-file permission denials. Single 429 always aborts immediately.
-const FORBIDDEN_ABORT_THRESHOLD = 3;
+// 429 is the only signal we treat as rate-limiting: retry the file a few times
+// honoring Retry-After before giving up on the whole scan. 403 is authorization,
+// not throttling — those files are recorded as permission failures and the scan
+// continues.
+const RATE_LIMIT_MAX_ATTEMPTS = 3;
+const RATE_LIMIT_BASE_BACKOFF_MS = 2000;
+const RATE_LIMIT_MAX_BACKOFF_MS = 30000;
 
 function statusOf(err: any): number | undefined {
   return err?.response?.status ?? err?.status;
 }
 
-async function scanFilesConcurrent(args: {
+// Retry-After in ms, when the response carried one (delta-seconds form only —
+// Bitbucket does not send the HTTP-date form).
+function retryAfterMsOf(err: any): number | undefined {
+  const headers = err?.originalError?.response?.headers ?? err?.response?.headers;
+  const raw = headers?.['retry-after'];
+  if (raw === undefined) return undefined;
+  const seconds = Number(raw);
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
+}
+
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
+export async function scanFilesConcurrent(args: {
   files: string[];
   parallelism: number;
   fetchContent: (filePath: string) => Promise<string>;
@@ -576,7 +614,6 @@ async function scanFilesConcurrent(args: {
   let i = 0;
   let aborted = false;
   let rateLimited = false;
-  let consecutive403s = 0;
   const workers: Promise<void>[] = [];
   const workerCount = Math.max(1, Math.min(parallelism, files.length));
 
@@ -586,30 +623,36 @@ async function scanFilesConcurrent(args: {
       const idx = i++;
       if (idx >= files.length) return;
       const filePath = files[idx];
-      try {
-        const content = await fetchContent(filePath);
-        consecutive403s = 0; // a successful read clears the streak
-        const matches = scanContent(content, contentRe, filterFn);
-        if (matches.length > 0) results.push({ path: filePath, matches });
-      } catch (err: any) {
-        const status = statusOf(err);
-        failures.push({ path: filePath, error: err?.message ?? String(err) });
+
+      let content: string | undefined;
+      let lastErr: any;
+      for (let attempt = 1; attempt <= RATE_LIMIT_MAX_ATTEMPTS; attempt++) {
+        try {
+          content = await fetchContent(filePath);
+          lastErr = undefined;
+          break;
+        } catch (err: any) {
+          lastErr = err;
+          if (statusOf(err) !== 429 || attempt === RATE_LIMIT_MAX_ATTEMPTS || aborted) break;
+          const backoff = retryAfterMsOf(err) ?? RATE_LIMIT_BASE_BACKOFF_MS * 2 ** (attempt - 1);
+          await sleep(Math.min(backoff + Math.random() * 250, RATE_LIMIT_MAX_BACKOFF_MS));
+        }
+      }
+
+      if (lastErr !== undefined) {
+        const status = statusOf(lastErr);
+        failures.push({ path: filePath, error: lastErr?.message ?? String(lastErr), status });
         if (status === 429) {
+          // Still throttled after retries — stop the scan; results so far are kept.
           rateLimited = true;
           aborted = true;
           return;
         }
-        if (status === 403) {
-          consecutive403s++;
-          if (consecutive403s >= FORBIDDEN_ABORT_THRESHOLD) {
-            rateLimited = true;
-            aborted = true;
-            return;
-          }
-        } else {
-          consecutive403s = 0;
-        }
+        continue; // 403 and other per-file failures: skip the file, keep scanning
       }
+
+      const matches = scanContent(content as string, contentRe, filterFn);
+      if (matches.length > 0) results.push({ path: filePath, matches });
     }
   };
 

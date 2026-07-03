@@ -167,7 +167,9 @@ export interface DenseSearchResponse {
     files_scanned?: number;
     files_attempted?: number;
     files_failed?: number;
+    files_permission_denied?: number;
     files_truncated?: boolean;
+    parallelism?: number;
   };
 }
 

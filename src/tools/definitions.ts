@@ -65,7 +65,16 @@ export const toolDefinitions: ToolDefinition[] = [
     availability: 'both',
     inputSchema: {
       type: 'object',
-      properties: { workspace: W, repository: R, pull_request_id: PRID },
+      properties: {
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
+        comment_limit: {
+          type: 'number',
+          description:
+            'Max active comments returned (default 20). total_comment_count/active_comment_count always reflect the full set, so raise this when active_comment_count exceeds the returned list.',
+        },
+      },
       required: ['workspace', 'repository', 'pull_request_id'],
     },
   },
@@ -683,8 +692,8 @@ export const toolDefinitions: ToolDefinition[] = [
         filename_pattern: { type: 'string', description: 'Glob scoping the file set. Strongly recommended.' },
         branch: BRANCH,
         regex_filter: { type: 'string', description: 'Optional second regex applied to each candidate hit line as a post-filter.' },
-        max_files: { type: 'number', description: 'Hard cap on files fetched. Default 3000. If exceeded, response has truncated: true and (on zero matches) a POSSIBLE_FALSE_NEGATIVE warning.' },
-        parallelism: { type: 'number', description: 'Concurrent file fetches. Default 4. Higher values risk Bitbucket rate-limiting (429/403); on RATE_LIMITED warning, lower this and narrow filename_pattern.' },
+        max_files: { type: 'number', description: 'Hard cap on files fetched. Default 3000 (env BITBUCKET_MAX_SCAN_FILES). If exceeded, response has truncated: true and (on zero matches) a POSSIBLE_FALSE_NEGATIVE warning.' },
+        parallelism: { type: 'number', description: 'Concurrent file fetches. Default 4 (env BITBUCKET_DEFAULT_PARALLELISM), capped at 20 (env BITBUCKET_MAX_PARALLELISM). 429s are retried with backoff; persistent throttling aborts with a RATE_LIMITED warning — then lower this and narrow filename_pattern. Per-file 403s are skipped and reported as PERMISSION_DENIED, never treated as throttling.' },
         limit: { type: 'number', description: 'Max total hit lines returned across all files (default: 25).' },
       },
       required: ['workspace', 'repository', 'content_query'],

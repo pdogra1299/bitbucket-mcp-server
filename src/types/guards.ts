@@ -21,12 +21,13 @@ const isValidAttachments = (value: any): boolean =>
 
 export const isGetPullRequestArgs = (
   args: any
-): args is { workspace: string; repository: string; pull_request_id: number } =>
+): args is { workspace: string; repository: string; pull_request_id: number; comment_limit?: number } =>
   typeof args === 'object' &&
   args !== null &&
   typeof args.workspace === 'string' &&
   typeof args.repository === 'string' &&
-  typeof args.pull_request_id === 'number';
+  typeof args.pull_request_id === 'number' &&
+  (args.comment_limit === undefined || typeof args.comment_limit === 'number');
 
 export const isListPullRequestsArgs = (
   args: any

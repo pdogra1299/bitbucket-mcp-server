@@ -130,6 +130,17 @@ export class BitbucketApiClient {
           ],
           isError: true,
         };
+      } else if (status === 429) {
+        const retryAfter = (error as ApiError).originalError?.response?.headers?.['retry-after'];
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Rate limited by Bitbucket (HTTP 429): ${context}.${retryAfter ? ` Retry after ${retryAfter}s.` : ''} Reduce request frequency or parallelism and retry.`,
+            },
+          ],
+          isError: true,
+        };
       }
 
       return {

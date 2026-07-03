@@ -1,5 +1,6 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { BitbucketApiClient } from '../utils/api-client.js';
+import { listRepoFiles } from '../utils/file-list.js';
 import {
   isListDirectoryContentArgs,
   isGetFileContentArgs,
@@ -438,6 +439,8 @@ export class FileHandlers {
           nextStart += pageEntries.length;
         }
       }
+      // True when the safety cap stopped pagination while the server still had pages.
+      const blameTruncated = keepGoing && pageCount >= maxPages;
 
       if (rawEntries.length === 0) {
         return {
@@ -541,6 +544,12 @@ export class FileHandlers {
               unique_commits: uniqueCommits.size,
               unique_authors: uniqueAuthors.size,
               grouped: group_by_commit,
+              ...(blameTruncated
+                ? {
+                    truncated: true,
+                    warning: `Blame pagination stopped at the ${maxPages}-page safety cap; lines beyond ${totalLines} are missing.`,
+                  }
+                : {}),
               blame: blameOutput,
             }, null, 2),
           },
@@ -574,29 +583,17 @@ export class FileHandlers {
 
     try {
       let allFiles: string[] = [];
+      let fileListTruncated = false;
 
       if (this.apiClient.getIsServer()) {
         // Bitbucket Server API - /files endpoint returns all files recursively
-        let apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/files`;
-        if (searchPath) {
-          apiPath += `/${searchPath}`;
-        }
-
-        const params: any = {
-          limit: 100000 // Fetch all files
-        };
-        if (branch) {
-          params.at = `refs/heads/${branch}`;
-        }
-
-        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
-
-        // Server returns array of file paths directly or paginated response
-        if (Array.isArray(response)) {
-          allFiles = response;
-        } else if (response.values) {
-          allFiles = response.values;
-        }
+        // (paginated + cached; the server clamps large page sizes)
+        const listing = await listRepoFiles(this.apiClient, workspace, repository, {
+          branch,
+          path: searchPath,
+        });
+        allFiles = listing.files;
+        fileListTruncated = listing.truncated;
       } else {
         // Bitbucket Cloud - need to recursively traverse directories
         // For now, use the src endpoint with max_depth
@@ -606,16 +603,25 @@ export class FileHandlers {
           apiPath += `/${searchPath}`;
         }
 
-        // Cloud requires recursive traversal - fetch with max_depth
-        const params: any = {
-          max_depth: 10,
-          pagelen: 100
-        };
+        // Cloud requires recursive traversal - fetch with max_depth, following
+        // the `next` cursor so results are not silently capped at one page.
+        const entries: any[] = [];
+        const maxCloudPages = 50;
+        let nextUrl: string | null = apiPath;
+        let params: any = { max_depth: 10, pagelen: 100 };
+        for (let page = 0; page < maxCloudPages && nextUrl; page++) {
+          const response: any = await this.apiClient.makeRequest<any>(
+            'get',
+            nextUrl,
+            undefined,
+            params ? { params } : undefined
+          );
+          entries.push(...(response.values || []));
+          nextUrl = response.next || null; // absolute URL; overrides baseURL in axios
+          params = undefined; // the next-cursor URL already encodes the query
+        }
+        fileListTruncated = nextUrl !== null;
 
-        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
-
-        // Extract file paths from Cloud response
-        const entries = response.values || [];
         allFiles = entries
           .filter((entry: any) => entry.type === 'commit_file')
           .map((entry: any) => entry.path);
@@ -650,7 +656,14 @@ export class FileHandlers {
         files: resultFiles,
         total_matched: totalMatched,
         returned: resultFiles.length,
-        truncated
+        truncated,
+        ...(fileListTruncated
+          ? {
+              file_list_truncated: true,
+              warning:
+                'The repository file listing hit the pagination safety cap; matches in unlisted files would be missed. Narrow the path parameter.',
+            }
+          : {}),
       };
 
       return {

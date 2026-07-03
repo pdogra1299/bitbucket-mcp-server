@@ -141,6 +141,10 @@ export class PullRequestHandlers {
     }
 
     const { workspace, repository, pull_request_id } = args;
+    const commentLimit =
+      typeof args.comment_limit === 'number' && args.comment_limit > 0
+        ? Math.floor(args.comment_limit)
+        : 20;
 
     try {
       const apiPath = this.apiClient.getIsServer()
@@ -189,7 +193,7 @@ export class PullRequestHandlers {
 
       try {
         const [commentsResult, fileChangesResult] = await Promise.all([
-          this.fetchPullRequestComments(workspace, repository, pull_request_id),
+          this.fetchPullRequestComments(workspace, repository, pull_request_id, commentLimit),
           this.fetchPullRequestFileChanges(workspace, repository, pull_request_id)
         ]);
 
@@ -713,7 +717,8 @@ export class PullRequestHandlers {
   private async fetchPullRequestComments(
     workspace: string,
     repository: string,
-    pullRequestId: number
+    pullRequestId: number,
+    commentLimit = 20
   ): Promise<{ comments: FormattedComment[]; activeCount: number; totalCount: number }> {
     try {
       let comments: FormattedComment[] = [];
@@ -799,7 +804,7 @@ export class PullRequestHandlers {
           })
           .map((a: any) => processNestedComments(a.comment, a.commentAnchor));
 
-        comments = processedComments.slice(0, 20);
+        comments = processedComments.slice(0, commentLimit);
       } else {
         const apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pullRequestId}/comments`;
         const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
@@ -811,7 +816,7 @@ export class PullRequestHandlers {
 
         const activeComments = allComments
           .filter((c: BitbucketCloudComment) => !c.deleted && !c.resolved)
-          .slice(0, 20);
+          .slice(0, commentLimit);
 
         activeCount = allComments.filter((c: BitbucketCloudComment) => !c.deleted && !c.resolved).length;
 

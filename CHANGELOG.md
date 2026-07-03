@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-07-03
+
+### Fixed
+
+- **`find_in_files` no longer fabricates rate-limit errors from permission denials.** Previously, 3 consecutive HTTP 403s aborted the whole scan and reported `RATE_LIMITED: Bitbucket returned 429/403...` — but 403 is authorization, not throttling, so a permission-scoped directory could falsely kill the scan. 403'd files are now skipped individually and reported via a new `PERMISSION_DENIED` warning (with `files_permission_denied` in diagnostics); the scan continues. The racy shared `consecutive403s` counter is gone. Only HTTP 429 means rate-limiting.
+- **HTTP 429 during a scan is retried instead of instantly aborting.** Each throttled file fetch is retried up to 3 attempts, honoring the `Retry-After` header (fallback: 2s/4s exponential backoff with jitter, 30s cap). Only after retries are exhausted does the scan stop — keeping all results gathered so far — with an accurate `RATE_LIMITED` warning.
+- **Repository file listings now paginate.** `find_in_files`, the index-gap probe, and `search_files` previously issued a single `limit=100000` request and silently dropped everything past the first page on instances that clamp page size. Listings now follow `isLastPage`/`nextPageStart` (Server) and the `next` cursor (Cloud, `search_files`), and surface `FILE_LIST_TRUNCATED` / `file_list_truncated` when the pagination safety cap is genuinely hit.
+- **`get_file_blame` reports truncation.** If the 100-page safety cap stops blame pagination early, the response now carries `truncated: true` and a warning instead of silently returning partial blame.
+- **Real Bitbucket throttling is labeled as such.** `handleApiError` now maps HTTP 429 to a clear "Rate limited by Bitbucket" message including `Retry-After` when present, instead of the generic API-error text.
+
+### Added
+
+- **In-memory file-list cache (60s TTL)** shared by `find_in_files`, the index-gap probe, and `search_files` — repeated searches against the same repo/branch no longer re-download the full file tree each call. API-only; nothing is written to disk.
+- **`comment_limit` parameter on `get_pull_request`** (default 20, previously a hard-coded slice) to fetch more active comments when a PR has long discussions.
+- **Env-tunable scan knobs:** `BITBUCKET_DEFAULT_PARALLELISM` (default 4), `BITBUCKET_MAX_PARALLELISM` (cap 20), `BITBUCKET_MAX_SCAN_FILES` (default 3000).
+
 ## [2.2.0] - 2026-06-05
 
 ### Added
