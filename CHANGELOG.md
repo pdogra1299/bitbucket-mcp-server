@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-07-05
+
+### Fixed
+
+- **Auth and server errors now include Bitbucket's request id for log correlation.** 401 (authentication failed), 403 (permission denied), and generic API error messages append `[bitbucket-ref: <x-arequestid>]` when Bitbucket returns the `x-arequestid` response header, so operators can correlate a failure to the exact entry in the Bitbucket Data Center access logs. No change when the header is absent; 404 responses are untouched. ([#16](https://github.com/pdogra1299/bitbucket-mcp-server/pull/16))
+
 ## [2.3.0] - 2026-07-03
 
 ### Fixed

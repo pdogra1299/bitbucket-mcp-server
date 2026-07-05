@@ -51,7 +51,7 @@ class BitbucketMCPServer {
     this.server = new Server(
       {
         name: 'bitbucket-mcp-server',
-        version: '2.3.0',
+        version: '2.3.1',
       },
       {
         capabilities: {
