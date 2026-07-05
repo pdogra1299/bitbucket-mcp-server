@@ -100,6 +100,12 @@ export class BitbucketApiClient {
     if (error.isAxiosError) {
       const { status, message } = error as ApiError;
 
+      // Surface Bitbucket's request id so operators can correlate an auth/server
+      // failure to the exact entry in the Bitbucket Data Center access logs. The
+      // header is present on every DC response but was otherwise dropped here.
+      const arequestid = (error as ApiError).originalError?.response?.headers?.['x-arequestid'];
+      const refSuffix = arequestid ? ` [bitbucket-ref: ${arequestid}]` : '';
+
       if (status === 404) {
         return {
           content: [
@@ -115,7 +121,7 @@ export class BitbucketApiClient {
           content: [
             {
               type: 'text',
-              text: `Authentication failed. Please check your ${this.isServer ? 'BITBUCKET_TOKEN' : 'BITBUCKET_USERNAME and BITBUCKET_APP_PASSWORD'}`,
+              text: `Authentication failed. Please check your ${this.isServer ? 'BITBUCKET_TOKEN' : 'BITBUCKET_USERNAME and BITBUCKET_APP_PASSWORD'}${refSuffix}`,
             },
           ],
           isError: true,
@@ -125,7 +131,7 @@ export class BitbucketApiClient {
           content: [
             {
               type: 'text',
-              text: `Permission denied: ${context}. Ensure your credentials have the necessary permissions.`,
+              text: `Permission denied: ${context}. Ensure your credentials have the necessary permissions.${refSuffix}`,
             },
           ],
           isError: true,
@@ -147,7 +153,7 @@ export class BitbucketApiClient {
         content: [
           {
             type: 'text',
-            text: `Bitbucket API error: ${message}`,
+            text: `Bitbucket API error: ${message}${refSuffix}`,
           },
         ],
         isError: true,
