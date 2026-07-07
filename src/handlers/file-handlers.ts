@@ -192,7 +192,14 @@ export class FileHandlers {
         const branchOrDefault = branch || 'HEAD';
         const metaPath = `/repositories/${workspace}/${repository}/src/${branchOrDefault}/${file_path}`;
         
-        const metadataResponse = await this.apiClient.makeRequest<BitbucketCloudFileMetadata>('get', metaPath);
+        const metadataResponse = await this.apiClient.makeRequest<BitbucketCloudFileMetadata>(
+          'get',
+          metaPath,
+          undefined,
+          {
+            params: { format: 'meta' }
+          }
+        );
         
         fileMetadata = {
           size: metadataResponse.size,
@@ -220,10 +227,8 @@ export class FileHandlers {
           };
         }
 
-        // Follow the download link to get actual content
-        const downloadUrl = metadataResponse.links.download.href;
-        const downloadResponse = await this.apiClient.makeRequest<any>('get', downloadUrl, undefined, {
-          baseURL: '', // Use full URL
+        // Bitbucket Cloud returns raw file content from the same src path.
+        const downloadResponse = await this.apiClient.makeRequest<any>('get', metaPath, undefined, {
           responseType: 'text',
           headers: { 'Accept': 'text/plain' }
         });
