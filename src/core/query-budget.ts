@@ -4,34 +4,12 @@
 // We treat each modifier clause (project:, repo:, lang:, ext:, path:, archived:, fork:)
 // and each free term / phrase / -term as one expression.
 
+import type { QueryClause, BuiltQuery } from '../types/index.js';
+
+// Bitbucket's documented caps (search-syntax docs, identical across DC
+// 7.13–10.3): these are protocol constants of the remote API, not tunables.
 export const MAX_QUERY_LENGTH = 250;
 export const MAX_EXPRESSIONS = 9;
-
-export interface QueryClause {
-  // The string to render into the query, e.g. `project:PROJ`, `lang:python`, `"foo"`, `-bar`.
-  text: string;
-  // Whether the clause may be dropped to fit within limits. The free-text term is required;
-  // optional clauses include exclude_terms, archived, fork, ext, lang, path, repo (in that drop order).
-  required: boolean;
-  // For diagnostics: which logical role this clause filled.
-  role:
-    | 'term'
-    | 'project'
-    | 'repo'
-    | 'lang'
-    | 'ext'
-    | 'path'
-    | 'archived'
-    | 'fork'
-    | 'exclude';
-}
-
-export interface BuiltQuery {
-  query: string;
-  expression_count: number;
-  query_length: number;
-  dropped: Array<{ role: QueryClause['role']; text: string; reason: string }>;
-}
 
 const DROP_PRIORITY: QueryClause['role'][] = [
   'exclude',

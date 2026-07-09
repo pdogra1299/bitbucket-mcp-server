@@ -1,5 +1,5 @@
 // Bitbucket Server API response types
-export interface BitbucketServerPullRequest {
+export type BitbucketServerPullRequest = {
   id: number;
   version: number;
   title: string;
@@ -78,7 +78,7 @@ export interface BitbucketServerPullRequest {
 }
 
 // Bitbucket Server Activity types
-export interface BitbucketServerActivity {
+export type BitbucketServerActivity = {
   id: number;
   createdDate: number;
   user: {
@@ -96,7 +96,7 @@ export interface BitbucketServerActivity {
 }
 
 // Bitbucket Server Branch types
-export interface BitbucketServerBranch {
+export type BitbucketServerBranch = {
   id: string;
   displayId: string;
   type: string;
@@ -116,7 +116,7 @@ export interface BitbucketServerBranch {
 }
 
 // Bitbucket Server Directory Entry
-export interface BitbucketServerDirectoryEntry {
+export type BitbucketServerDirectoryEntry = {
   path: {
     name: string;
     toString: string;
@@ -127,7 +127,7 @@ export interface BitbucketServerDirectoryEntry {
 }
 
 // Bitbucket Cloud API response types
-export interface BitbucketCloudPullRequest {
+export type BitbucketCloudPullRequest = {
   id: number;
   title: string;
   description: string;
@@ -188,7 +188,7 @@ export interface BitbucketCloudPullRequest {
 }
 
 // Bitbucket Cloud Branch types
-export interface BitbucketCloudBranch {
+export type BitbucketCloudBranch = {
   name: string;
   target: {
     hash: string;
@@ -207,7 +207,7 @@ export interface BitbucketCloudBranch {
 }
 
 // Bitbucket Cloud Directory Entry
-export interface BitbucketCloudDirectoryEntry {
+export type BitbucketCloudDirectoryEntry = {
   path: string;
   type: 'commit_file' | 'commit_directory';
   size?: number;
@@ -225,7 +225,7 @@ export interface BitbucketCloudDirectoryEntry {
 }
 
 // Bitbucket Cloud File Metadata
-export interface BitbucketCloudFileMetadata {
+export type BitbucketCloudFileMetadata = {
   path: string;
   size: number;
   encoding?: string;
@@ -256,7 +256,7 @@ export interface BitbucketCloudFileMetadata {
 }
 
 // Merge info type for enhanced PR details
-export interface MergeInfo {
+export type MergeInfo = {
   mergeCommitHash?: string;
   mergedBy?: string;
   mergedAt?: string;
@@ -264,7 +264,7 @@ export interface MergeInfo {
 }
 
 // Comment types
-export interface BitbucketServerComment {
+export type BitbucketServerComment = {
   id: number;
   version: number;
   text: string;
@@ -284,7 +284,7 @@ export interface BitbucketServerComment {
   };
 }
 
-export interface BitbucketCloudComment {
+export type BitbucketCloudComment = {
   id: number;
   content: {
     raw: string;
@@ -307,7 +307,7 @@ export interface BitbucketCloudComment {
 }
 
 // File change types
-export interface BitbucketServerFileChange {
+export type BitbucketServerFileChange = {
   path: {
     toString: string;
   };
@@ -322,7 +322,7 @@ export interface BitbucketServerFileChange {
   linesRemoved?: number;
 }
 
-export interface BitbucketCloudFileChange {
+export type BitbucketCloudFileChange = {
   path: string;
   type: 'added' | 'modified' | 'removed' | 'renamed';
   lines_added: number;
@@ -333,7 +333,7 @@ export interface BitbucketCloudFileChange {
 }
 
 // Formatted comment type for response
-export interface FormattedComment {
+export type FormattedComment = {
   id: number;
   author: string;
   text: string;
@@ -347,14 +347,14 @@ export interface FormattedComment {
 }
 
 // Formatted file change type for response
-export interface FormattedFileChange {
+export type FormattedFileChange = {
   path: string;
   status: 'added' | 'modified' | 'removed' | 'renamed';
   old_path?: string;
 }
 
 // Types for code snippet matching
-export interface CodeMatch {
+export type CodeMatch = {
   line_number: number;
   line_type: 'ADDED' | 'REMOVED' | 'CONTEXT';
   exact_content: string;
@@ -372,7 +372,7 @@ export interface CodeMatch {
   };
 }
 
-export interface MultipleMatchesError {
+export type MultipleMatchesError = {
   code: 'MULTIPLE_MATCHES_FOUND';
   message: string;
   occurrences: Array<{
@@ -386,7 +386,7 @@ export interface MultipleMatchesError {
 }
 
 // Commit types
-export interface BitbucketServerCommit {
+export type BitbucketServerCommit = {
   id: string;
   displayId: string;
   message: string;
@@ -406,7 +406,7 @@ export interface BitbucketServerCommit {
   }>;
 }
 
-export interface BitbucketCloudCommit {
+export type BitbucketCloudCommit = {
   hash: string;
   message: string;
   author: {
@@ -431,7 +431,7 @@ export interface BitbucketCloudCommit {
   };
 }
 
-export interface FormattedCommit {
+export type FormattedCommit = {
   hash: string;
   abbreviated_hash: string;
   message: string;
@@ -444,7 +444,7 @@ export interface FormattedCommit {
 }
 
 // Search types
-export interface BitbucketServerSearchRequest {
+export type BitbucketServerSearchRequest = {
   query: string;
   entities: {
     code?: {
@@ -466,7 +466,7 @@ export interface BitbucketServerSearchRequest {
   };
 }
 
-export interface BitbucketServerSearchResult {
+export type BitbucketServerSearchResult = {
   scope?: {
     repository?: {
       slug: string;
@@ -529,7 +529,7 @@ export interface BitbucketServerSearchResult {
   };
 }
 
-export interface FormattedSearchResult {
+export type FormattedSearchResult = {
   file_path: string;
   file_name: string;
   repository: string;
@@ -545,7 +545,7 @@ export interface FormattedSearchResult {
 }
 
 // Build status types for Bitbucket Server
-export interface BitbucketServerBuildSummary {
+export type BitbucketServerBuildSummary = {
   [commitId: string]: {
     failed?: number;
     inProgress?: number;
@@ -554,7 +554,7 @@ export interface BitbucketServerBuildSummary {
   };
 }
 
-export interface BuildStatus {
+export type BuildStatus = {
   successful: number;
   failed: number;
   in_progress: number;
@@ -562,7 +562,7 @@ export interface BuildStatus {
 }
 
 // Project and Repository types
-export interface BitbucketServerProject {
+export type BitbucketServerProject = {
   key: string;
   id: number;
   name: string;
@@ -576,7 +576,7 @@ export interface BitbucketServerProject {
   };
 }
 
-export interface BitbucketCloudProject {
+export type BitbucketCloudProject = {
   key: string;
   uuid: string;
   name: string;
@@ -589,7 +589,7 @@ export interface BitbucketCloudProject {
   };
 }
 
-export interface BitbucketServerRepository {
+export type BitbucketServerRepository = {
   slug: string;
   id: number;
   name: string;
@@ -618,7 +618,7 @@ export interface BitbucketServerRepository {
   };
 }
 
-export interface BitbucketCloudRepository {
+export type BitbucketCloudRepository = {
   slug: string;
   uuid: string;
   name: string;

@@ -1,30 +1,5 @@
 import { minimatch } from 'minimatch';
-
-export interface DiffSection {
-  filePath: string;
-  oldPath?: string; // For renamed files
-  content: string;
-  isNew: boolean;
-  isDeleted: boolean;
-  isRenamed: boolean;
-  isBinary: boolean;
-}
-
-export interface FilterOptions {
-  includePatterns?: string[];
-  excludePatterns?: string[];
-  filePath?: string;
-}
-
-export interface FilteredResult {
-  sections: DiffSection[];
-  metadata: {
-    totalFiles: number;
-    includedFiles: number;
-    excludedFiles: number;
-    excludedFileList: string[];
-  };
-}
+import type { DiffSection, DiffFilterOptions, DiffFilteredResult } from '../types/index.js';
 
 export class DiffParser {
   /**
@@ -133,7 +108,7 @@ export class DiffParser {
   /**
    * Apply filters to diff sections
    */
-  filterSections(sections: DiffSection[], options: FilterOptions): FilteredResult {
+  filterSections(sections: DiffSection[], options: DiffFilterOptions): DiffFilteredResult {
     const excludedFileList: string[] = [];
     let filteredSections = sections;
     

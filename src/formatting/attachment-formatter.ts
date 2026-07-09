@@ -3,7 +3,7 @@
  * description Markdown using the `attachment:N/M` reference scheme.
  */
 
-export type AttachmentRender = 'image' | 'link' | 'auto';
+import type { AttachmentRender } from '../types/index.js';
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg|bmp|ico|tiff?)$/i;
 

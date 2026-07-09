@@ -1,236 +1,114 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { BitbucketApiClient } from '../utils/api-client.js';
-import {
-  isListProjectsArgs,
-  isListRepositoriesArgs
-} from '../types/guards.js';
-import {
-  BitbucketServerProject,
-  BitbucketCloudProject,
-  BitbucketServerRepository,
-  BitbucketCloudRepository
-} from '../types/bitbucket.js';
+import { BitbucketApiClient } from '../core/api-client.js';
+import { isListProjectsArgs, isListRepositoriesArgs } from '../tools/guards.js';
+import { compactObject, errorContent, jsonContent, serverPage } from '../formatting/respond.js';
+import type { ToolResponse } from '../types/index.js';
+
+// Discovery tools — single-call listings with compact output.
 
 export class ProjectHandlers {
-  constructor(
-    private apiClient: BitbucketApiClient,
-    private baseUrl: string
-  ) {}
+  constructor(private apiClient: BitbucketApiClient) {}
 
-  async handleListProjects(args: any) {
+  private get cfg() {
+    return this.apiClient.getConfig();
+  }
+
+  async handleListProjects(args: any): Promise<ToolResponse> {
     if (!isListProjectsArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for list_projects'
-      );
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for list_projects');
     }
-
-    const { name, permission, limit = 25, start = 0 } = args;
+    const { name, permission } = args;
+    const limit = args.limit ?? this.cfg.pagination.defaultListLimit;
+    const start = args.start ?? 0;
 
     try {
-      let apiPath: string;
-      let params: any = {};
-      let projects: any[] = [];
-      let totalCount = 0;
-      let nextPageStart: number | null = null;
-
       if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API
-        apiPath = `/rest/api/1.0/projects`;
-        params = {
-          limit,
-          start
-        };
-
-        if (name) {
-          params.name = name;
-        }
-        if (permission) {
-          params.permission = permission;
-        }
-
-        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
-
-        // Format projects
-        projects = (response.values || []).map((project: BitbucketServerProject) => ({
-          key: project.key,
-          name: project.name,
-          description: project.description || '',
-          type: project.type,
-          url: `${this.baseUrl}/projects/${project.key}`
-        }));
-
-        totalCount = response.size || projects.length;
-        if (!response.isLastPage && response.nextPageStart !== undefined) {
-          nextPageStart = response.nextPageStart;
-        }
-      } else {
-        // Bitbucket Cloud API
-        apiPath = `/workspaces`;
-        params = {
-          pagelen: limit,
-          page: Math.floor(start / limit) + 1
-        };
-
-        // Cloud uses workspaces, not projects exactly
-        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
-
-        projects = (response.values || []).map((workspace: any) => ({
-          key: workspace.slug,
-          name: workspace.name,
-          description: '',
-          type: 'WORKSPACE',
-          url: workspace.links.html.href
-        }));
-
-        totalCount = response.size || projects.length;
-        if (response.next) {
-          nextPageStart = start + limit;
-        }
+        const response = await this.apiClient.makeRequest<any>('get', '/rest/api/1.0/projects', undefined, {
+          params: { limit, start, ...(name ? { name } : {}), ...(permission ? { permission } : {}) },
+        });
+        const projects = (response.values || []).map((p: any) =>
+          compactObject({ key: p.key, name: p.name, description: p.description || undefined })
+        );
+        return jsonContent(
+          compactObject({
+            projects,
+            has_more: serverPage(response).hasMore || undefined,
+            next_start: serverPage(response).nextStart,
+          })
+        );
       }
 
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              projects,
-              total_count: totalCount,
-              start,
-              limit,
-              has_more: nextPageStart !== null,
-              next_start: nextPageStart
-            }, null, 2),
-          },
-        ],
-      };
+      const response = await this.apiClient.makeRequest<any>('get', '/workspaces', undefined, {
+        params: { pagelen: limit, page: Math.floor(start / limit) + 1 },
+      });
+      const projects = (response.values || []).map((w: any) => compactObject({ key: w.slug, name: w.name }));
+      return jsonContent(
+        compactObject({
+          projects,
+          has_more: !!response.next || undefined,
+          next_start: response.next ? start + limit : undefined,
+        })
+      );
     } catch (error) {
-      return this.apiClient.handleApiError(error, 'listing projects');
+      return this.apiClient.handleApiError(error, 'listing projects') as ToolResponse;
     }
   }
 
-  async handleListRepositories(args: any) {
+  async handleListRepositories(args: any): Promise<ToolResponse> {
     if (!isListRepositoriesArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for list_repositories'
-      );
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for list_repositories');
     }
-
-    const { workspace, name, permission, limit = 25, start = 0 } = args;
+    const { workspace, name, permission } = args;
+    const limit = args.limit ?? this.cfg.pagination.defaultListLimit;
+    const start = args.start ?? 0;
 
     try {
-      let apiPath: string;
-      let params: any = {};
-      let repositories: any[] = [];
-      let totalCount = 0;
-      let nextPageStart: number | null = null;
-
       if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API
-        if (workspace) {
-          // List repos in a specific project
-          apiPath = `/rest/api/1.0/projects/${workspace}/repos`;
-        } else {
-          // List all accessible repos
-          apiPath = `/rest/api/1.0/repos`;
-        }
-
-        params = {
-          limit,
-          start
-        };
-
-        if (name) {
-          params.name = name;
-        }
-        if (permission) {
-          params.permission = permission;
-        }
-        if (!workspace && name) {
-          // When listing all repos and filtering by name
-          params.projectname = name;
-        }
-
+        const apiPath = workspace ? `/rest/api/1.0/projects/${workspace}/repos` : '/rest/api/1.0/repos';
+        const params: any = { limit, start };
+        if (name) params.name = name;
+        if (permission) params.permission = permission;
         const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
-
-        // Format repositories
-        repositories = (response.values || []).map((repo: BitbucketServerRepository) => ({
-          slug: repo.slug,
-          name: repo.name,
-          description: repo.description || '',
-          project_key: repo.project.key,
-          project_name: repo.project.name,
-          is_public: repo.public,
-          url: `${this.baseUrl}/projects/${repo.project.key}/repos/${repo.slug}`
-        }));
-
-        totalCount = response.size || repositories.length;
-        if (!response.isLastPage && response.nextPageStart !== undefined) {
-          nextPageStart = response.nextPageStart;
-        }
-      } else {
-        // Bitbucket Cloud API
-        if (workspace) {
-          // List repos in a specific workspace
-          apiPath = `/repositories/${workspace}`;
-        } else {
-          // Cloud doesn't support listing all repos without workspace
-          // We'll return an error message
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  error: 'Bitbucket Cloud requires a workspace parameter to list repositories. Please provide a workspace.'
-                }, null, 2),
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        params = {
-          pagelen: limit,
-          page: Math.floor(start / limit) + 1
-        };
-
-        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
-
-        repositories = (response.values || []).map((repo: BitbucketCloudRepository) => ({
-          slug: repo.slug,
-          name: repo.name,
-          description: repo.description || '',
-          project_key: repo.project?.key || '',
-          project_name: repo.project?.name || '',
-          is_public: !repo.is_private,
-          url: repo.links.html.href
-        }));
-
-        totalCount = response.size || repositories.length;
-        if (response.next) {
-          nextPageStart = start + limit;
-        }
+        const repositories = (response.values || []).map((r: any) =>
+          compactObject({
+            slug: r.slug,
+            name: r.name !== r.slug ? r.name : undefined,
+            project: r.project?.key,
+            description: r.description || undefined,
+          })
+        );
+        return jsonContent(
+          compactObject({
+            repositories,
+            has_more: serverPage(response).hasMore || undefined,
+            next_start: serverPage(response).nextStart,
+          })
+        );
       }
 
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              repositories,
-              total_count: totalCount,
-              start,
-              limit,
-              has_more: nextPageStart !== null,
-              next_start: nextPageStart,
-              workspace: workspace || 'all'
-            }, null, 2),
-          },
-        ],
-      };
+      if (!workspace) {
+        return errorContent('Bitbucket Cloud requires a workspace parameter to list repositories.');
+      }
+      const response = await this.apiClient.makeRequest<any>('get', `/repositories/${workspace}`, undefined, {
+        params: { pagelen: limit, page: Math.floor(start / limit) + 1 },
+      });
+      const repositories = (response.values || []).map((r: any) =>
+        compactObject({
+          slug: r.slug,
+          name: r.name !== r.slug ? r.name : undefined,
+          project: r.project?.key,
+          description: r.description || undefined,
+        })
+      );
+      return jsonContent(
+        compactObject({
+          repositories,
+          has_more: !!response.next || undefined,
+          next_start: response.next ? start + limit : undefined,
+        })
+      );
     } catch (error) {
-      return this.apiClient.handleApiError(error, workspace ? `listing repositories in ${workspace}` : 'listing repositories');
+      return this.apiClient.handleApiError(error, workspace ? `listing repositories in ${workspace}` : 'listing repositories') as ToolResponse;
     }
   }
 }
