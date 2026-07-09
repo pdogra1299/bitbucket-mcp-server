@@ -1,54 +1,20 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { BitbucketApiClient } from '../utils/api-client.js';
-import {
-  isGetPullRequestDiffArgs,
-  isSetPrApprovalArgs,
-  isSetReviewStatusArgs
-} from '../types/guards.js';
-import { DiffParser } from '../utils/diff-parser.js';
-import { minimatch } from 'minimatch';
+import { BitbucketApiClient, encodeRepoPath } from '../core/api-client.js';
+import { isGetPullRequestDiffArgs, isSetReviewStatusArgs } from '../tools/guards.js';
+import { DiffParser } from '../formatting/diff-parser.js';
+import { textContent } from '../formatting/respond.js';
+import type { ToolResponse } from '../types/index.js';
 
-// Interfaces for structured diff response
-interface DiffLine {
-  source_line: number;
-  destination_line: number;
-  type: 'ADDED' | 'REMOVED' | 'CONTEXT';
-  content: string;
-}
-
-interface DiffHunk {
-  context: string;
-  source_start: number;
-  source_span: number;
-  destination_start: number;
-  destination_span: number;
-  lines: DiffLine[];
-}
-
-interface DiffFile {
-  file_path: string;
-  old_path: string | null;
-  status: 'added' | 'deleted' | 'modified' | 'renamed';
-  hunks: DiffHunk[];
-}
-
-interface StructuredDiffResponse {
-  pull_request_id: number;
-  files: DiffFile[];
-  summary: {
-    total_files: number;
-    files_included: number;
-    files_excluded: number;
-  };
-  filter_metadata?: {
-    filters_applied: {
-      file_path?: string;
-      include_patterns?: string[];
-      exclude_patterns?: string[];
-    };
-    excluded_file_list?: string[];
-  };
-}
+// Review tools.
+//
+// get_pull_request_diff — ONE call returning a raw unified diff (Accept:
+// text/plain on Server too). The old per-line JSON explosion was ~5-10x more
+// tokens with zero extra information: line numbers and ADDED/REMOVED/CONTEXT
+// are derivable from @@ hunk headers and +/-/space prefixes.
+//
+// set_review_status — one tool for the whole reviewer state machine
+// (APPROVED / NEEDS_WORK / UNAPPROVED are mutually exclusive values of the
+// same participant status; the PUT needs no version).
 
 export class ReviewHandlers {
   constructor(
@@ -56,359 +22,129 @@ export class ReviewHandlers {
     private username: string
   ) {}
 
-  /**
-   * Transform Bitbucket Server JSON diff response to structured format
-   */
-  private transformBitbucketServerDiff(
-    response: any,
-    pullRequestId: number,
-    includePatterns?: string[],
-    excludePatterns?: string[],
-    filePath?: string
-  ): StructuredDiffResponse {
-    const allDiffs = response.diffs || [];
-    const excludedFileList: string[] = [];
-
-    // Apply filtering
-    let filteredDiffs = allDiffs;
-
-    // File path filter (already handled by API, but double-check)
-    if (filePath) {
-      filteredDiffs = allDiffs.filter((diff: any) => {
-        const destPath = diff.destination?.toString || diff.source?.toString;
-        const srcPath = diff.source?.toString;
-        const matches = destPath === filePath || srcPath === filePath;
-        if (!matches) {
-          excludedFileList.push(destPath || srcPath);
-        }
-        return matches;
-      });
-    } else {
-      // Apply exclude patterns (blacklist)
-      if (excludePatterns && excludePatterns.length > 0) {
-        filteredDiffs = filteredDiffs.filter((diff: any) => {
-          const filePath = diff.destination?.toString || diff.source?.toString;
-          const shouldExclude = excludePatterns.some(pattern =>
-            minimatch(filePath, pattern, { matchBase: true })
-          );
-          if (shouldExclude) {
-            excludedFileList.push(filePath);
-            return false;
-          }
-          return true;
-        });
-      }
-
-      // Apply include patterns (whitelist)
-      if (includePatterns && includePatterns.length > 0) {
-        filteredDiffs = filteredDiffs.filter((diff: any) => {
-          const filePath = diff.destination?.toString || diff.source?.toString;
-          const shouldInclude = includePatterns.some(pattern =>
-            minimatch(filePath, pattern, { matchBase: true })
-          );
-          if (!shouldInclude) {
-            excludedFileList.push(filePath);
-            return false;
-          }
-          return true;
-        });
-      }
-    }
-
-    // Transform diffs to structured format
-    const files: DiffFile[] = filteredDiffs.map((diff: any) => {
-      const destPath = diff.destination?.toString;
-      const srcPath = diff.source?.toString;
-
-      // Determine file status
-      let status: 'added' | 'deleted' | 'modified' | 'renamed' = 'modified';
-      if (!srcPath || diff.source?.toString === '/dev/null') {
-        status = 'added';
-      } else if (!destPath || diff.destination?.toString === '/dev/null') {
-        status = 'deleted';
-      } else if (srcPath !== destPath) {
-        status = 'renamed';
-      }
-
-      // Transform hunks
-      const hunks: DiffHunk[] = (diff.hunks || []).map((hunk: any) => {
-        // Flatten segments into lines
-        const lines: DiffLine[] = [];
-        for (const segment of (hunk.segments || [])) {
-          const lineType = segment.type as 'ADDED' | 'REMOVED' | 'CONTEXT';
-          for (const line of (segment.lines || [])) {
-            lines.push({
-              source_line: line.source,
-              destination_line: line.destination,
-              type: lineType,
-              content: line.line
-            });
-          }
-        }
-
-        return {
-          context: hunk.context || '',
-          source_start: hunk.sourceLine,
-          source_span: hunk.sourceSpan,
-          destination_start: hunk.destinationLine,
-          destination_span: hunk.destinationSpan,
-          lines
-        };
-      });
-
-      return {
-        file_path: destPath || srcPath,
-        old_path: (srcPath && srcPath !== destPath) ? srcPath : null,
-        status,
-        hunks
-      };
-    });
-
-    const result: StructuredDiffResponse = {
-      pull_request_id: pullRequestId,
-      files,
-      summary: {
-        total_files: allDiffs.length,
-        files_included: files.length,
-        files_excluded: excludedFileList.length
-      }
-    };
-
-    // Add filter metadata if any filtering was applied
-    if (filePath || includePatterns || excludePatterns) {
-      result.filter_metadata = {
-        filters_applied: {}
-      };
-      if (filePath) {
-        result.filter_metadata.filters_applied.file_path = filePath;
-      }
-      if (includePatterns) {
-        result.filter_metadata.filters_applied.include_patterns = includePatterns;
-      }
-      if (excludePatterns) {
-        result.filter_metadata.filters_applied.exclude_patterns = excludePatterns;
-      }
-      if (excludedFileList.length > 0) {
-        result.filter_metadata.excluded_file_list = excludedFileList;
-      }
-    }
-
-    return result;
-  }
-
-  async handleGetPullRequestDiff(args: any) {
+  async handleGetPullRequestDiff(args: any): Promise<ToolResponse> {
     if (!isGetPullRequestDiffArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for get_pull_request_diff'
-      );
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for get_pull_request_diff');
     }
-
-    const {
-      workspace,
-      repository,
-      pull_request_id,
-      context_lines = 3,
-      include_patterns,
-      exclude_patterns,
-      file_path
-    } = args;
+    const { workspace, repository, pull_request_id, context_lines = 3, include_patterns, exclude_patterns, file_path } = args;
 
     try {
       let apiPath: string;
-      let config: any = {};
-
+      const reqConfig: any = { headers: { Accept: 'text/plain' }, responseType: 'text' };
       if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API - use JSON response for structured data
         apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/diff`;
-
-        // If specific file requested, add to path (API supports this natively)
-        if (file_path) {
-          apiPath = `${apiPath}/${file_path}`;
-        }
-
-        config.params = { contextLines: context_lines };
-        config.headers = { 'Accept': 'application/json' };
-
-        const jsonResponse = await this.apiClient.makeRequest<any>('get', apiPath, undefined, config);
-
-        // Transform to structured format
-        const structuredResponse = this.transformBitbucketServerDiff(
-          jsonResponse,
-          pull_request_id,
-          include_patterns,
-          exclude_patterns,
-          file_path
-        );
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(structuredResponse, null, 2),
-            },
-          ],
-        };
+        if (file_path) apiPath += `/${encodeRepoPath(file_path)}`;
+        reqConfig.params = { contextLines: context_lines };
+        if (args.ignore_whitespace) reqConfig.params.whitespace = 'ignore-all';
       } else {
-        // Bitbucket Cloud API - keep text/plain for now (different API structure)
         apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/diff`;
-        config.params = { context: context_lines };
-        config.headers = { 'Accept': 'text/plain' };
-
-        const rawDiff = await this.apiClient.makeRequest<string>('get', apiPath, undefined, config);
-
-        // Check if filtering is needed
-        const needsFiltering = file_path || include_patterns || exclude_patterns;
-
-        if (!needsFiltering) {
-          // Return raw diff without filtering
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  pull_request_id,
-                  diff: rawDiff
-                }, null, 2),
-              },
-            ],
-          };
-        }
-
-        // Apply filtering for Cloud
-        const diffParser = new DiffParser();
-        const sections = diffParser.parseDiffIntoSections(rawDiff);
-
-        const filterOptions = {
-          includePatterns: include_patterns,
-          excludePatterns: exclude_patterns,
-          filePath: file_path
-        };
-
-        const filteredResult = diffParser.filterSections(sections, filterOptions);
-        const filteredDiff = diffParser.reconstructDiff(filteredResult.sections);
-
-        // Build response with filtering metadata
-        const response: any = {
-          pull_request_id,
-          diff: filteredDiff
-        };
-
-        // Add filter metadata
-        if (filteredResult.metadata.excludedFiles > 0 || file_path || include_patterns || exclude_patterns) {
-          response.filter_metadata = {
-            total_files: filteredResult.metadata.totalFiles,
-            included_files: filteredResult.metadata.includedFiles,
-            excluded_files: filteredResult.metadata.excludedFiles
-          };
-
-          if (filteredResult.metadata.excludedFileList.length > 0) {
-            response.filter_metadata.excluded_file_list = filteredResult.metadata.excludedFileList;
-          }
-
-          response.filter_metadata.filters_applied = {};
-          if (file_path) {
-            response.filter_metadata.filters_applied.file_path = file_path;
-          }
-          if (include_patterns) {
-            response.filter_metadata.filters_applied.include_patterns = include_patterns;
-          }
-          if (exclude_patterns) {
-            response.filter_metadata.filters_applied.exclude_patterns = exclude_patterns;
-          }
-        }
-
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(response, null, 2),
-            },
-          ],
-        };
+        reqConfig.params = { context: context_lines };
+        if (file_path) reqConfig.params.path = file_path;
       }
+
+      const rawDiff = await this.apiClient.makeRequest<string>('get', apiPath, undefined, reqConfig);
+      return this.renderDiff({
+        header: `PR #${pull_request_id} diff`,
+        rawDiff: String(rawDiff ?? ''),
+        include_patterns,
+        exclude_patterns,
+        // file_path was applied server-side; no client re-filter needed.
+        excludedListMax: this.apiClient.getConfig().output.excludedListMax,
+      });
     } catch (error) {
-      return this.apiClient.handleApiError(error, `getting diff for pull request ${pull_request_id} in ${workspace}/${repository}`);
+      return this.apiClient.handleApiError(error, `getting diff for pull request ${pull_request_id} in ${workspace}/${repository}`) as ToolResponse;
     }
   }
 
-  async handleSetPrApproval(args: any) {
-    if (!isSetPrApprovalArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for set_pr_approval'
-      );
-    }
+  /**
+   * Shared unified-diff renderer: optional glob filtering, plain-text output,
+   * explicit truncation/exclusion notes. Used by PR and commit diffs.
+   */
+  renderDiff(args: {
+    header: string;
+    rawDiff: string;
+    include_patterns?: string[];
+    exclude_patterns?: string[];
+    excludedListMax: number;
+  }): ToolResponse {
+    const { header, rawDiff, include_patterns, exclude_patterns, excludedListMax } = args;
 
-    const { workspace, repository, pull_request_id, approved } = args;
-
-    try {
-      const username = this.username.replace(/[@+]/g, '_');
-
-      if (this.apiClient.getIsServer()) {
-        const apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/participants/${username}`;
-        await this.apiClient.makeRequest<any>('put', apiPath, { status: approved ? 'APPROVED' : 'UNAPPROVED' });
-      } else {
-        const apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/approve`;
-        await this.apiClient.makeRequest<any>(approved ? 'post' : 'delete', apiPath);
+    let body = rawDiff;
+    let note = '';
+    if ((include_patterns && include_patterns.length > 0) || (exclude_patterns && exclude_patterns.length > 0)) {
+      const parser = new DiffParser();
+      const sections = parser.parseDiffIntoSections(rawDiff);
+      const filtered = parser.filterSections(sections, {
+        includePatterns: include_patterns,
+        excludePatterns: exclude_patterns,
+      });
+      body = parser.reconstructDiff(filtered.sections);
+      if (filtered.metadata.excludedFiles > 0) {
+        const listed = filtered.metadata.excludedFileList.slice(0, excludedListMax);
+        note =
+          `\n[filtered: ${filtered.metadata.includedFiles}/${filtered.metadata.totalFiles} files shown; ` +
+          `excluded ${filtered.metadata.excludedFiles}: ${listed.join(', ')}` +
+          `${filtered.metadata.excludedFiles > listed.length ? ` …and ${filtered.metadata.excludedFiles - listed.length} more` : ''}]`;
       }
-
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            message: approved ? 'Pull request approved' : 'Pull request approval removed',
-            pull_request_id,
-            by: this.username
-          }, null, 2),
-        }],
-      };
-    } catch (error) {
-      return this.apiClient.handleApiError(error, `setting approval on pull request ${pull_request_id} in ${workspace}/${repository}`);
     }
+
+    const fileCount = (body.match(/^diff --git/gm) ?? []).length;
+    const headerLine = `${header} (${fileCount} files)${note}`;
+    return textContent(`${headerLine}\n\n${body}`);
   }
 
-  async handleSetReviewStatus(args: any) {
+  async handleSetReviewStatus(args: any): Promise<ToolResponse> {
     if (!isSetReviewStatusArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for set_review_status'
-      );
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for set_review_status');
     }
-
-    const { workspace, repository, pull_request_id, request_changes, comment } = args;
+    const { workspace, repository, pull_request_id, status, comment } = args;
 
     try {
       const username = this.username.replace(/[@+]/g, '_');
-
+      let statusNote = '';
       if (this.apiClient.getIsServer()) {
-        const apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/participants/${username}`;
-        await this.apiClient.makeRequest<any>('put', apiPath, { status: request_changes ? 'NEEDS_WORK' : 'UNAPPROVED' });
-        if (comment) {
-          const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments`;
-          await this.apiClient.makeRequest<any>('post', commentPath, { text: comment });
-        }
+        await this.apiClient.makeRequest<any>(
+          'put',
+          `/rest/api/latest/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/participants/${username}`,
+          { status },
+          undefined,
+          { idempotent: true }
+        );
       } else {
-        const apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/request-changes`;
-        await this.apiClient.makeRequest<any>(request_changes ? 'post' : 'delete', apiPath);
-        if (comment && request_changes) {
-          const commentPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/comments`;
-          await this.apiClient.makeRequest<any>('post', commentPath, { content: { raw: comment } });
+        const base = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}`;
+        if (status === 'APPROVED') {
+          await this.apiClient.makeRequest<any>('post', `${base}/approve`);
+        } else if (status === 'NEEDS_WORK') {
+          await this.apiClient.makeRequest<any>('post', `${base}/request-changes`);
+        } else {
+          // UNAPPROVED: clear both possible prior states. Only a 404
+          // ("nothing to clear") is expected — anything else is a real error.
+          const clear = async (path: string): Promise<boolean> => {
+            try {
+              await this.apiClient.makeRequest<any>('delete', path);
+              return true;
+            } catch (e: any) {
+              if (e?.status === 404) return false;
+              throw e;
+            }
+          };
+          const clearedApproval = await clear(`${base}/approve`);
+          const clearedChanges = await clear(`${base}/request-changes`);
+          if (!clearedApproval && !clearedChanges) statusNote = ' (there was no prior approval or change-request to clear)';
         }
       }
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            message: request_changes ? 'Changes requested on pull request' : 'Change request removed',
-            pull_request_id,
-            by: this.username
-          }, null, 2),
-        }],
-      };
+      if (comment) {
+        const commentPath = this.apiClient.getIsServer()
+          ? `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments`
+          : `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/comments`;
+        const body = this.apiClient.getIsServer() ? { text: comment } : { content: { raw: comment } };
+        await this.apiClient.makeRequest<any>('post', commentPath, body);
+      }
+
+      return textContent(`Review status set to ${status} on PR #${pull_request_id}${statusNote}.${comment ? ' Comment added.' : ''}`);
     } catch (error) {
-      return this.apiClient.handleApiError(error, `setting review status on pull request ${pull_request_id} in ${workspace}/${repository}`);
+      return this.apiClient.handleApiError(error, `setting review status on pull request ${pull_request_id} in ${workspace}/${repository}`) as ToolResponse;
     }
   }
 }

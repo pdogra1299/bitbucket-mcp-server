@@ -1,681 +1,317 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { BitbucketApiClient } from '../utils/api-client.js';
-import { listRepoFiles } from '../utils/file-list.js';
+import { BitbucketApiClient, encodeRepoPath } from '../core/api-client.js';
 import {
   isListDirectoryContentArgs,
   isGetFileContentArgs,
-  isSearchFilesArgs,
-  isGetFileBlameArgs
-} from '../types/guards.js';
-import { minimatch } from 'minimatch';
-import {
-  BitbucketServerDirectoryEntry,
-  BitbucketCloudDirectoryEntry,
-  BitbucketCloudFileMetadata
-} from '../types/bitbucket.js';
-import * as path from 'path';
+  isGetFileBlameArgs,
+} from '../tools/guards.js';
+import { errorContent, textContent, isoDate } from '../formatting/respond.js';
+import type { ToolResponse } from '../types/index.js';
+
+// Bitbucket DC's page.max.source.length default — lines this long were
+// probably server-truncated (protocol constant of the remote, not a tunable).
+const SERVER_MAX_SOURCE_LINE_LENGTH = 5000;
+
+// File tools, rebound to the cheapest verified endpoints:
+//  * get_file_content — ONE windowed browse call (browse pages over LINES;
+//    server clamps at page.max.source.lines=5000). No metadata pre-call, no
+//    full-file transfer for windowed reads.
+//  * get_file_blame — ONE browse?blame&noContent call per requested window
+//    instead of paging the whole file and filtering client-side.
+//  * list_directory_content — one browse call, compact text output.
 
 export class FileHandlers {
-  // Default lines by file extension
-  private readonly DEFAULT_LINES_BY_EXT: Record<string, number> = {
-    '.yml': 200, '.yaml': 200, '.json': 200,  // Config files
-    '.md': 300, '.txt': 300,                   // Docs
-    '.ts': 500, '.js': 500, '.py': 500,       // Code
-    '.tsx': 500, '.jsx': 500, '.java': 500,   // More code
-    '.log': -100  // Last 100 lines for logs
-  };
+  constructor(private apiClient: BitbucketApiClient) {}
 
-  constructor(
-    private apiClient: BitbucketApiClient,
-    private baseUrl: string
-  ) {}
+  // ── list_directory_content ─────────────────────────────────────────────────
 
-  async handleListDirectoryContent(args: any) {
+  async handleListDirectoryContent(args: any): Promise<ToolResponse> {
     if (!isListDirectoryContentArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for list_directory_content'
-      );
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for list_directory_content');
     }
-
     const { workspace, repository, path: dirPath = '', branch } = args;
 
+    const { pagination } = this.apiClient.getConfig();
     try {
-      let apiPath: string;
-      let params: any = {};
-      let response: any;
-
+      const entries: Array<{ name: string; isDir: boolean }> = [];
+      let truncated = false;
       if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API
-        apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/browse`;
-        if (dirPath) {
-          apiPath += `/${dirPath}`;
+        let apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/browse`;
+        if (dirPath) apiPath += `/${encodeRepoPath(dirPath)}`;
+        let start = 0;
+        for (let page = 0; page < pagination.browseMaxPages; page++) {
+          const params: any = { limit: pagination.dirPageLimit, start };
+          if (branch) params.at = `refs/heads/${branch}`;
+          const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
+          const children = response.children ?? response;
+          entries.push(
+            ...(children?.values || []).map((e: any) => ({ name: e.path.name, isDir: e.type !== 'FILE' }))
+          );
+          if (children?.isLastPage !== false) break;
+          if (page === pagination.browseMaxPages - 1) {
+            truncated = true;
+            break;
+          }
+          start = typeof children.nextPageStart === 'number' ? children.nextPageStart : start + (children.values?.length ?? 0);
         }
-        if (branch) {
-          params.at = `refs/heads/${branch}`;
-        }
-        
-        response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
       } else {
-        // Bitbucket Cloud API
         const branchOrDefault = branch || 'HEAD';
-        apiPath = `/repositories/${workspace}/${repository}/src/${branchOrDefault}`;
-        if (dirPath) {
-          apiPath += `/${dirPath}`;
+        let url: string | null = `/repositories/${workspace}/${repository}/src/${branchOrDefault}${dirPath ? `/${dirPath}` : ''}`;
+        let params: any | undefined = { pagelen: pagination.dirPageLimit };
+        for (let page = 0; page < pagination.browseMaxPages && url; page++) {
+          const response: any = await this.apiClient.makeRequest<any>('get', url, undefined, params ? { params } : undefined);
+          entries.push(
+            ...(response.values || []).map((e: any) => ({
+              name: e.path.split('/').pop() || e.path,
+              isDir: e.type !== 'commit_file',
+            }))
+          );
+          url = response.next || null;
+          params = undefined;
         }
-        
-        response = await this.apiClient.makeRequest<any>('get', apiPath);
+        truncated = url !== null;
       }
 
-      // Format the response
-      let contents: any[] = [];
-      let actualBranch = branch;
-
-      if (this.apiClient.getIsServer()) {
-        // Bitbucket Server response
-        const entries = response.children?.values || [];
-        contents = entries.map((entry: BitbucketServerDirectoryEntry) => ({
-          name: entry.path.name,
-          type: entry.type === 'FILE' ? 'file' : 'directory',
-          size: entry.size,
-          path: dirPath ? `${dirPath}/${entry.path.name}` : entry.path.name
-        }));
-        
-        // Get the actual branch from the response if available
-        if (!branch && response.path?.components) {
-          // Server returns default branch info in the response
-          actualBranch = 'default';
-        }
-      } else {
-        // Bitbucket Cloud response
-        const entries = response.values || [];
-        contents = entries.map((entry: BitbucketCloudDirectoryEntry) => ({
-          name: entry.path.split('/').pop() || entry.path,
-          type: entry.type === 'commit_file' ? 'file' : 'directory',
-          size: entry.size,
-          path: entry.path
-        }));
-        
-        // Cloud returns the branch in the response
-        actualBranch = branch || response.commit?.branch || 'main';
-      }
-
-      // Strip size from each item — not useful for navigation
-      const strippedContents = contents.map(({ size: _size, ...rest }: any) => rest);
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              path: dirPath || '/',
-              branch: actualBranch,
-              contents: strippedContents,
-              total_items: strippedContents.length
-            }, null, 2),
-          },
-        ],
-      };
+      entries.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
+      const header = `${workspace}/${repository}:${dirPath || '/'}${branch ? ` @ ${branch}` : ''} — ${entries.length} entries${truncated ? ' (more exist — listing hit the page cap)' : ''}`;
+      const lines = entries.map(e => (e.isDir ? `${e.name}/` : e.name));
+      return textContent([header, '', ...lines].join('\n'));
     } catch (error) {
-      return this.apiClient.handleApiError(error, `listing directory '${dirPath}' in ${workspace}/${repository}`);
+      return this.apiClient.handleApiError(error, `listing directory '${dirPath}' in ${workspace}/${repository}`) as ToolResponse;
     }
   }
 
-  async handleGetFileContent(args: any) {
+  // ── get_file_content ───────────────────────────────────────────────────────
+
+  async handleGetFileContent(args: any): Promise<ToolResponse> {
     if (!isGetFileContentArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for get_file_content'
-      );
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for get_file_content');
     }
-
     const { workspace, repository, file_path, branch, start_line, line_count, full_content = false } = args;
+    const { pagination } = this.apiClient.getConfig();
 
     try {
-      let fileContent: string;
-      let fileMetadata: any = {};
-      const fileSizeLimit = 1024 * 1024; // 1MB default limit
-
-      if (this.apiClient.getIsServer()) {
-        // Bitbucket Server - get file metadata first to check size
-        const browsePath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/browse/${file_path}`;
-        const browseParams: any = {};
-        if (branch) {
-          browseParams.at = `refs/heads/${branch}`;
-        }
-        
-        try {
-          const metadataResponse = await this.apiClient.makeRequest<any>('get', browsePath, undefined, { params: browseParams });
-          fileMetadata = {
-            size: metadataResponse.size || 0,
-            path: file_path
-          };
-
-          // Check file size
-          if (!full_content && fileMetadata.size > fileSizeLimit) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: JSON.stringify({
-                    error: 'File too large',
-                    file_path,
-                    size: fileMetadata.size,
-                    size_mb: (fileMetadata.size / (1024 * 1024)).toFixed(2),
-                    message: `File exceeds size limit. Use full_content: true to force retrieval or use start_line/line_count for partial content.`
-                  }, null, 2),
-                },
-              ],
-              isError: true,
-            };
-          }
-        } catch (e) {
-          // If browse fails, continue to try raw endpoint
-        }
-
-        // Get raw content
-        const rawPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/raw/${file_path}`;
-        const rawParams: any = {};
-        if (branch) {
-          rawParams.at = `refs/heads/${branch}`;
-        }
-        
-        const response = await this.apiClient.makeRequest<any>('get', rawPath, undefined, { 
-          params: rawParams,
-          responseType: 'text',
-          headers: { 'Accept': 'text/plain' }
-        });
-        
-        fileContent = response;
-      } else {
-        // Bitbucket Cloud - first get metadata
-        const branchOrDefault = branch || 'HEAD';
-        const metaPath = `/repositories/${workspace}/${repository}/src/${branchOrDefault}/${file_path}`;
-        
-        const metadataResponse = await this.apiClient.makeRequest<BitbucketCloudFileMetadata>('get', metaPath);
-        
-        fileMetadata = {
-          size: metadataResponse.size,
-          encoding: metadataResponse.encoding,
-          path: metadataResponse.path,
-          commit: metadataResponse.commit
-        };
-
-        // Check file size
-        if (!full_content && fileMetadata.size > fileSizeLimit) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify({
-                  error: 'File too large',
-                  file_path,
-                  size: fileMetadata.size,
-                  size_mb: (fileMetadata.size / (1024 * 1024)).toFixed(2),
-                  message: `File exceeds size limit. Use full_content: true to force retrieval or use start_line/line_count for partial content.`
-                }, null, 2),
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        // Follow the download link to get actual content
-        const downloadUrl = metadataResponse.links.download.href;
-        const downloadResponse = await this.apiClient.makeRequest<any>('get', downloadUrl, undefined, {
-          baseURL: '', // Use full URL
-          responseType: 'text',
-          headers: { 'Accept': 'text/plain' }
-        });
-        
-        fileContent = downloadResponse;
+      // Full content, or tail reads (negative start_line), need the raw file.
+      if (full_content || (start_line !== undefined && start_line < 0)) {
+        return await this.rawContent(args);
       }
 
-      // Apply line filtering if requested
-      let processedContent = fileContent;
-      let lineInfo: any = null;
+      if (!this.apiClient.getIsServer()) {
+        return await this.rawContent(args); // Cloud has no line-windowed read
+      }
 
-      if (!full_content || start_line !== undefined || line_count !== undefined) {
-        const lines = fileContent.split('\n');
-        const totalLines = lines.length;
+      // Server: one windowed browse call.
+      const startIdx = start_line !== undefined ? Math.max(0, start_line - 1) : 0;
+      const requested = line_count ?? pagination.browsePageLines;
+      const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/browse/${encodeRepoPath(file_path)}`;
+      const params: any = { start: startIdx, limit: Math.min(requested, pagination.browsePageLines) };
+      if (branch) params.at = `refs/heads/${branch}`;
+      const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
 
-        // Determine default line count based on file extension
-        const ext = path.extname(file_path).toLowerCase();
-        const defaultLineCount = this.DEFAULT_LINES_BY_EXT[ext] || 500;
-        const shouldUseTail = defaultLineCount < 0;
-
-        // Calculate start and end indices
-        let startIdx: number;
-        let endIdx: number;
-
-        if (start_line !== undefined) {
-          if (start_line < 0) {
-            // Negative start_line means from end
-            startIdx = Math.max(0, totalLines + start_line);
-            endIdx = totalLines;
-          } else {
-            // 1-based to 0-based index
-            startIdx = Math.max(0, start_line - 1);
-            endIdx = startIdx + (line_count || Math.abs(defaultLineCount));
-          }
-        } else if (!full_content && fileMetadata.size > 50 * 1024) {
-          // Auto-truncate large files
-          if (shouldUseTail) {
-            startIdx = Math.max(0, totalLines + defaultLineCount);
-            endIdx = totalLines;
-          } else {
-            startIdx = 0;
-            endIdx = Math.abs(defaultLineCount);
-          }
-        } else {
-          // Return full content for small files
-          startIdx = 0;
-          endIdx = totalLines;
+      if (!Array.isArray(response?.lines)) {
+        // Directory or unexpected shape.
+        if (response?.children) {
+          return errorContent(`'${file_path}' is a directory — use list_directory_content.`);
         }
-
-        // Ensure indices are within bounds
-        startIdx = Math.max(0, Math.min(startIdx, totalLines));
-        endIdx = Math.max(startIdx, Math.min(endIdx, totalLines));
-
-        // Extract the requested lines
-        const selectedLines = lines.slice(startIdx, endIdx);
-        processedContent = selectedLines.join('\n');
-
-        lineInfo = {
-          total_lines: totalLines,
-          returned_lines: {
-            start: startIdx + 1,
-            end: endIdx
-          },
-          truncated: startIdx > 0 || endIdx < totalLines,
-          message: endIdx < totalLines 
-            ? `Showing lines ${startIdx + 1}-${endIdx} of ${totalLines}. File size: ${(fileMetadata.size / 1024).toFixed(1)}KB`
-            : null
-        };
+        return await this.rawContent(args);
       }
 
-      // Build response
-      const response: any = {
-        file_path,
-        branch: branch || (this.apiClient.getIsServer() ? 'default' : 'main'),
-        content: processedContent
-      };
+      const lines: string[] = response.lines.map((l: any) => l?.text ?? '');
+      const first = startIdx + 1;
+      const last = startIdx + lines.length;
+      const isLast = response.isLastPage !== false;
+      const totalNote = isLast ? `of ${last} lines` : `(more lines exist — continue with start_line=${last + 1})`;
+      // Server truncates lines at page.max.source.length (default 5000) with
+      // no in-band marker; flag lines at/above that boundary.
+      const longLine = lines.some(l => l.length >= SERVER_MAX_SOURCE_LINE_LENGTH);
 
-      if (lineInfo) {
-        response.line_info = lineInfo;
+      const header = `${file_path}${branch ? ` @ ${branch}` : ''} lines ${first}-${last} ${totalNote}`;
+      const numbered = lines.map((l, i) => `${first + i}: ${l}`);
+      const body = [header, '', ...numbered];
+      if (longLine) {
+        body.push('', 'NOTE: very long lines may be server-truncated at 5000 chars; use full_content=true for exact bytes.');
       }
-
-      if (fileMetadata.commit) {
-        response.last_modified = {
-          commit_id: fileMetadata.commit.hash,
-          author: fileMetadata.commit.author?.user?.display_name || fileMetadata.commit.author?.raw,
-          date: fileMetadata.commit.date,
-          message: fileMetadata.commit.message
-        };
-      }
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(response, null, 2),
-          },
-        ],
-      };
+      return textContent(body.join('\n'));
     } catch (error: any) {
-      // Handle specific not found error
       if (error.status === 404) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `File '${file_path}' not found in ${workspace}/${repository}${branch ? ` on branch '${branch}'` : ''}`,
-            },
-          ],
-          isError: true,
-        };
+        return errorContent(`File '${file_path}' not found in ${workspace}/${repository}${branch ? ` on branch '${branch}'` : ''}`);
       }
-      return this.apiClient.handleApiError(error, `getting file content for '${file_path}' in ${workspace}/${repository}`);
+      return this.apiClient.handleApiError(error, `getting file content for '${file_path}' in ${workspace}/${repository}`) as ToolResponse;
     }
   }
 
-  // Helper method to get default line count based on file extension
-  private getDefaultLines(filePath: string, fileSize: number): { full: boolean } | { start: number; count: number } {
-    // Small files: return full content
-    if (fileSize < 50 * 1024) { // 50KB
-      return { full: true };
-    }
-
-    const ext = path.extname(filePath).toLowerCase();
-    const defaultLines = this.DEFAULT_LINES_BY_EXT[ext] || 500;
-
-    return {
-      start: defaultLines < 0 ? defaultLines : 1,
-      count: Math.abs(defaultLines)
-    };
-  }
-
-  async handleGetFileBlame(args: any) {
-    if (!isGetFileBlameArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for get_file_blame'
+  private async rawContent(args: any): Promise<ToolResponse> {
+    const { workspace, repository, file_path, branch, start_line, line_count } = args;
+    let raw: string;
+    if (this.apiClient.getIsServer()) {
+      const params: any = {};
+      if (branch) params.at = `refs/heads/${branch}`;
+      raw = await this.apiClient.makeRequest<string>(
+        'get',
+        `/rest/api/1.0/projects/${workspace}/repos/${repository}/raw/${encodeRepoPath(file_path)}`,
+        undefined,
+        { params, responseType: 'text', headers: { Accept: 'text/plain' } }
+      );
+    } else {
+      const branchOrDefault = branch || 'HEAD';
+      raw = await this.apiClient.makeRequest<string>(
+        'get',
+        `/repositories/${workspace}/${repository}/src/${branchOrDefault}/${file_path}`,
+        undefined,
+        { responseType: 'text', headers: { Accept: 'text/plain' } }
       );
     }
+    const allLines = String(raw).split('\n');
+    const total = allLines.length;
+    let startIdx = 0;
+    let endIdx = total;
+    if (start_line !== undefined) {
+      startIdx = start_line < 0 ? Math.max(0, total + start_line) : Math.max(0, start_line - 1);
+      endIdx = line_count !== undefined ? Math.min(total, startIdx + line_count) : total;
+    } else if (line_count !== undefined) {
+      endIdx = Math.min(total, line_count);
+    }
+    let window = allLines.slice(startIdx, endIdx);
 
-    if (!this.apiClient.getIsServer()) {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'get_file_blame is only supported on Bitbucket Server/Data Center. Bitbucket Cloud does not expose a blame API.',
-          },
-        ],
-        isError: true,
-      };
+    // Whole-file paths (full_content / tail / Cloud) have no server-side
+    // window — cap the RETURNED text so one call can't flood the context.
+    // Truncation is marked with window guidance, never silent.
+    const capBytes = this.apiClient.getConfig().output.fileContentMaxKb * 1024;
+    let capNote = '';
+    let returned = 0;
+    for (let i = 0; i < window.length; i++) {
+      returned += window[i].length + 1;
+      if (returned > capBytes) {
+        const shownEnd = startIdx + i;
+        capNote = `\n\n[truncated at ${this.apiClient.getConfig().output.fileContentMaxKb} KB (line ${shownEnd}) — fetch the rest with start_line=${shownEnd + 1}, or raise BITBUCKET_FILE_CONTENT_MAX_KB]`;
+        window = window.slice(0, i);
+        endIdx = shownEnd;
+        break;
+      }
     }
 
-    const {
-      workspace,
-      repository,
-      file_path,
-      branch,
-      start_line,
-      line_count,
-      group_by_commit = true,
-    } = args;
+    const header = `${file_path}${branch ? ` @ ${branch}` : ''} lines ${startIdx + 1}-${endIdx} of ${total}`;
+    const numbered = window.map((l, i) => `${startIdx + 1 + i}: ${l}`);
+    return textContent([header, '', ...numbered].join('\n') + capNote);
+  }
+
+  // ── get_file_blame ─────────────────────────────────────────────────────────
+
+  async handleGetFileBlame(args: any): Promise<ToolResponse> {
+    if (!isGetFileBlameArgs(args)) {
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for get_file_blame');
+    }
+    if (!this.apiClient.getIsServer()) {
+      return errorContent('get_file_blame is only supported on Bitbucket Server/Data Center (no Cloud blame API).');
+    }
+
+    const { workspace, repository, file_path, branch, start_line, line_count } = args;
+    const { pagination } = this.apiClient.getConfig();
 
     try {
-      const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/browse/${file_path}`;
-      const baseParams: any = { blame: 'true' };
-      if (branch) {
-        baseParams.at = `refs/heads/${branch}`;
-      }
+      const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/browse/${encodeRepoPath(file_path)}`;
+      const baseParams: any = { blame: 'true', noContent: 'true' };
+      if (branch) baseParams.at = `refs/heads/${branch}`;
 
-      // Blame endpoint paginates by LINE index, not by entry. Response shape:
-      //   { lines, blame, start, size, limit, isLastPage, nextPageStart }
-      // Some versions return a plain array of blame entries instead.
+      // Fetch ONLY the pages covering the requested window (the endpoint
+      // pages over lines). Without a window, walk pages up to the safety cap.
+      const windowStart = start_line !== undefined ? Math.max(1, start_line) : 1;
+      const windowEnd =
+        start_line !== undefined && line_count !== undefined
+          ? windowStart + line_count - 1
+          : line_count !== undefined
+            ? line_count
+            : undefined;
+
       const rawEntries: any[] = [];
-      const pageLimit = 1000;
-      let nextStart = 0;
-      let keepGoing = true;
-      const maxPages = 100; // safety cap
-      let pageCount = 0;
-
-      while (keepGoing && pageCount < maxPages) {
-        pageCount++;
-        const params: any = { ...baseParams, start: nextStart, limit: pageLimit };
+      let pageStart = windowStart - 1;
+      let truncated = false;
+      for (let page = 0; page < pagination.browseMaxPages; page++) {
+        const remaining = windowEnd !== undefined ? windowEnd - pageStart : pagination.browsePageLines;
+        if (remaining <= 0) break;
+        const params = { ...baseParams, start: pageStart, limit: Math.min(remaining, pagination.browsePageLines) };
         const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
 
         let pageEntries: any[] = [];
-        let pagedWrapper = false;
         let hasMore: boolean | undefined;
-        let wrapperNext: number | undefined;
-
+        let nextStart: number | undefined;
         if (Array.isArray(response)) {
           pageEntries = response;
+          hasMore = undefined; // legacy shape: no pagination info (BSERV-8482, pre-7.0)
         } else if (Array.isArray(response?.blame)) {
           pageEntries = response.blame;
-          pagedWrapper = true;
           hasMore = response.isLastPage === false;
-          wrapperNext = typeof response.nextPageStart === 'number' ? response.nextPageStart : undefined;
+          nextStart = typeof response.nextPageStart === 'number' ? response.nextPageStart : undefined;
         } else if (Array.isArray(response?.values)) {
           pageEntries = response.values;
-          pagedWrapper = true;
           hasMore = response.isLastPage === false;
-          wrapperNext = typeof response.nextPageStart === 'number' ? response.nextPageStart : undefined;
+          nextStart = typeof response.nextPageStart === 'number' ? response.nextPageStart : undefined;
         }
-
         rawEntries.push(...pageEntries);
 
-        if (pageEntries.length === 0) {
-          keepGoing = false;
-        } else if (pagedWrapper) {
-          keepGoing = hasMore === true;
-          nextStart = wrapperNext ?? nextStart + pageLimit;
-        } else {
-          // Plain array — continue only if full page
-          keepGoing = pageEntries.length >= pageLimit;
-          nextStart += pageEntries.length;
+        const covered = pageEntries.reduce((acc, e) => acc + (e.spannedLines ?? 1), 0);
+        if (pageEntries.length === 0) break;
+        if (windowEnd !== undefined && pageStart + covered >= windowEnd) break;
+        if (hasMore === false) break;
+        if (hasMore === undefined && covered < (params.limit as number)) break;
+        if (page === pagination.browseMaxPages - 1) {
+          truncated = true;
+          break;
         }
+        pageStart = nextStart ?? pageStart + covered;
       }
-      // True when the safety cap stopped pagination while the server still had pages.
-      const blameTruncated = keepGoing && pageCount >= maxPages;
 
       if (rawEntries.length === 0) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify({
-                file_path,
-                branch: branch || 'default',
-                total_lines: 0,
-                blame: [],
-                message: 'No blame information returned. The file may be empty or binary.',
-              }, null, 2),
-            },
-          ],
-        };
+        return textContent(`blame ${file_path}${branch ? ` @ ${branch}` : ''}: no blame data (file may be empty or binary).`);
       }
 
-      // Normalize entries to { line_start, line_end, commit_id, author, date, message, original_file_name }
-      const normalized = rawEntries.map((entry: any) => {
-        const lineStart = entry.lineNumber ?? entry.line ?? 1;
-        const spanned = entry.spannedLines ?? 1;
-        const lineEnd = lineStart + spanned - 1;
-        const ts = entry.authorTimestamp ?? entry.committerTimestamp;
-        const date = typeof ts === 'number' ? new Date(ts).toISOString() : undefined;
+      // Normalize spans and clip to the window.
+      type Span = { start: number; end: number; commit: string; author: string; date?: string; message?: string };
+      let spans: Span[] = rawEntries
+        .map((e: any) => {
+          const start = e.lineNumber ?? e.line ?? 1;
+          const spanned = e.spannedLines ?? 1;
+          const commit: string = e.commitDisplayId ?? e.displayCommitHash ?? (e.commitHash ?? e.commitId ?? '').slice(0, 12);
+          return {
+            start,
+            end: start + spanned - 1,
+            commit,
+            author: e.author?.displayName || e.author?.name || e.displayName || 'unknown',
+            date: isoDate(e.authorTimestamp ?? e.committerTimestamp),
+            message: typeof e.commitMessage === 'string' ? e.commitMessage.split('\n')[0] : undefined,
+          };
+        })
+        .sort((a, b) => a.start - b.start);
 
-        return {
-          line_start: lineStart,
-          line_end: lineEnd,
-          commit_id: entry.commitHash ?? entry.commitId,
-          commit_display_id: entry.commitDisplayId,
-          author: {
-            name: entry.author?.displayName || entry.displayName || entry.author?.name,
-            email: entry.author?.emailAddress || entry.emailAddress,
-          },
-          date,
-          message: entry.commitMessage,
-          original_file_name: entry.fileName,
-        };
-      }).sort((a, b) => a.line_start - b.line_start);
-
-      const totalLines = normalized.length > 0
-        ? normalized[normalized.length - 1].line_end
-        : 0;
-
-      // Apply line filtering
-      let filterStart = 1;
-      let filterEnd = totalLines;
-      if (start_line !== undefined) {
-        filterStart = Math.max(1, start_line);
-        filterEnd = line_count !== undefined
-          ? Math.min(totalLines, filterStart + line_count - 1)
-          : totalLines;
-      } else if (line_count !== undefined) {
-        filterEnd = Math.min(totalLines, line_count);
+      if (windowEnd !== undefined || start_line !== undefined) {
+        const lo = windowStart;
+        const hi = windowEnd ?? Number.MAX_SAFE_INTEGER;
+        spans = spans
+          .filter(s => s.end >= lo && s.start <= hi)
+          .map(s => ({ ...s, start: Math.max(s.start, lo), end: Math.min(s.end, hi) }));
       }
 
-      let filtered = normalized.filter(e => e.line_end >= filterStart && e.line_start <= filterEnd);
-      // Clip ranges to the requested window
-      filtered = filtered.map(e => ({
-        ...e,
-        line_start: Math.max(e.line_start, filterStart),
-        line_end: Math.min(e.line_end, filterEnd),
-      }));
-
-      // Compute summary stats across the filtered set
-      const uniqueCommits = new Set(filtered.map(e => e.commit_id).filter(Boolean));
-      const uniqueAuthors = new Set(
-        filtered.map(e => e.author?.email || e.author?.name).filter(Boolean)
+      // Dedupe commit metadata into a legend; emit compact span lines.
+      const commits = new Map<string, Span>();
+      for (const s of spans) {
+        if (!commits.has(s.commit)) commits.set(s.commit, s);
+      }
+      const lastLine = spans.length > 0 ? spans[spans.length - 1].end : 0;
+      const header = `blame ${file_path}${branch ? ` @ ${branch}` : ''} lines ${windowStart}-${windowEnd ?? lastLine} — ${commits.size} commits`;
+      const legend = [...commits.values()].map(
+        s => `  ${s.commit}  ${s.author}  ${s.date ?? ''}  ${s.message ?? ''}`.trimEnd()
       );
-
-      let blameOutput: any[];
-      if (group_by_commit) {
-        blameOutput = filtered;
-      } else {
-        blameOutput = [];
-        for (const entry of filtered) {
-          for (let ln = entry.line_start; ln <= entry.line_end; ln++) {
-            blameOutput.push({
-              line: ln,
-              commit_id: entry.commit_id,
-              commit_display_id: entry.commit_display_id,
-              author: entry.author,
-              date: entry.date,
-              message: entry.message,
-              original_file_name: entry.original_file_name,
-            });
-          }
-        }
+      const spanLines = spans.map(s => `  ${s.start === s.end ? s.start : `${s.start}-${s.end}`}: ${s.commit}`);
+      const body = [header, 'commits:', ...legend, 'lines:', ...spanLines];
+      if (truncated) {
+        body.push('', `WARNING: stopped at the ${pagination.browseMaxPages}-page safety cap; later lines are missing. Request a line window.`);
       }
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              file_path,
-              branch: branch || 'default',
-              total_lines: totalLines,
-              returned_lines: { start: filterStart, end: filterEnd },
-              unique_commits: uniqueCommits.size,
-              unique_authors: uniqueAuthors.size,
-              grouped: group_by_commit,
-              ...(blameTruncated
-                ? {
-                    truncated: true,
-                    warning: `Blame pagination stopped at the ${maxPages}-page safety cap; lines beyond ${totalLines} are missing.`,
-                  }
-                : {}),
-              blame: blameOutput,
-            }, null, 2),
-          },
-        ],
-      };
+      return textContent(body.join('\n'));
     } catch (error: any) {
       if (error.status === 404) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `File '${file_path}' not found in ${workspace}/${repository}${branch ? ` on branch '${branch}'` : ''}`,
-            },
-          ],
-          isError: true,
-        };
+        return errorContent(`File '${file_path}' not found in ${workspace}/${repository}${branch ? ` on branch '${branch}'` : ''}`);
       }
-      return this.apiClient.handleApiError(error, `getting blame for '${file_path}' in ${workspace}/${repository}`);
-    }
-  }
-
-  async handleSearchFiles(args: any) {
-    if (!isSearchFilesArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for search_files'
-      );
-    }
-
-    const { workspace, repository, pattern, path: searchPath, branch, limit = 100 } = args;
-
-    try {
-      let allFiles: string[] = [];
-      let fileListTruncated = false;
-
-      if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API - /files endpoint returns all files recursively
-        // (paginated + cached; the server clamps large page sizes)
-        const listing = await listRepoFiles(this.apiClient, workspace, repository, {
-          branch,
-          path: searchPath,
-        });
-        allFiles = listing.files;
-        fileListTruncated = listing.truncated;
-      } else {
-        // Bitbucket Cloud - need to recursively traverse directories
-        // For now, use the src endpoint with max_depth
-        const branchOrDefault = branch || 'HEAD';
-        let apiPath = `/repositories/${workspace}/${repository}/src/${branchOrDefault}`;
-        if (searchPath) {
-          apiPath += `/${searchPath}`;
-        }
-
-        // Cloud requires recursive traversal - fetch with max_depth, following
-        // the `next` cursor so results are not silently capped at one page.
-        const entries: any[] = [];
-        const maxCloudPages = 50;
-        let nextUrl: string | null = apiPath;
-        let params: any = { max_depth: 10, pagelen: 100 };
-        for (let page = 0; page < maxCloudPages && nextUrl; page++) {
-          const response: any = await this.apiClient.makeRequest<any>(
-            'get',
-            nextUrl,
-            undefined,
-            params ? { params } : undefined
-          );
-          entries.push(...(response.values || []));
-          nextUrl = response.next || null; // absolute URL; overrides baseURL in axios
-          params = undefined; // the next-cursor URL already encodes the query
-        }
-        fileListTruncated = nextUrl !== null;
-
-        allFiles = entries
-          .filter((entry: any) => entry.type === 'commit_file')
-          .map((entry: any) => entry.path);
-      }
-
-      // Apply pattern filtering if provided (case-insensitive like VS Code's file search)
-      let matchedFiles = allFiles;
-      if (pattern) {
-        matchedFiles = allFiles.filter(filePath => {
-          // Try matching with the pattern as-is
-          if (minimatch(filePath, pattern, { matchBase: true, nocase: true })) {
-            return true;
-          }
-          // Also try with **/ prefix for convenience
-          if (!pattern.startsWith('**/') && minimatch(filePath, `**/${pattern}`, { matchBase: true, nocase: true })) {
-            return true;
-          }
-          return false;
-        });
-      }
-
-      // Apply limit to results
-      const totalMatched = matchedFiles.length;
-      const truncated = totalMatched > limit;
-      const resultFiles = matchedFiles.slice(0, limit);
-
-      // Build response
-      const response = {
-        branch: branch || 'default',
-        search_path: searchPath || '/',
-        pattern: pattern || '*',
-        files: resultFiles,
-        total_matched: totalMatched,
-        returned: resultFiles.length,
-        truncated,
-        ...(fileListTruncated
-          ? {
-              file_list_truncated: true,
-              warning:
-                'The repository file listing hit the pagination safety cap; matches in unlisted files would be missed. Narrow the path parameter.',
-            }
-          : {}),
-      };
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(response, null, 2),
-          },
-        ],
-      };
-    } catch (error: any) {
-      return this.apiClient.handleApiError(error, `searching files in ${workspace}/${repository}`);
+      return this.apiClient.handleApiError(error, `getting blame for '${file_path}' in ${workspace}/${repository}`) as ToolResponse;
     }
   }
 }

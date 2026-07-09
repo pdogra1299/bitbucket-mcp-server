@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-07-09
+
+Complete revamp: grep-like repo search, drastically fewer Bitbucket API calls, rate-limit-safe transport, compact token-efficient responses, and a consolidated 25-tool surface. Design and verified API research in `REVAMP_PLAN.md`.
+
+### Added
+
+- **`grep` tool — search a repo like ripgrep on a local clone (Server/DC only).** One `archive?at=<sha>` download per repo+commit is streamed (tar.gz, constant memory), regex-scanned line-by-line, and cached in an in-memory byte-budget LRU with content-hash blob dedup across branches. Warm queries cost **1 API call** (the freshness check) instead of a listing + up to 3000 raw file GETs. Full regex, any branch, no index gaps, `content`/`files`/`count` modes, context lines, ripgrep-style output with `as_of <commit>`. Falls back to a bounded per-file scan when the archive endpoint is unavailable. Completeness contract: retention caps never reduce scan coverage (oversized text files are stream-scanned and re-fetched individually on warm hits); binaries are skipped and counted, never silent.
+- **Client-side rate-limit pacing.** All requests flow through a token bucket sized to Bitbucket DC's per-user limiter (default 5 req/s sustained, burst 50 — DC's server default is 60/5) plus a global concurrency cap, making 429s mathematically avoidable on default instances. Bounded retries with full-jitter backoff (Retry-After honored opportunistically; DC documents none), in-flight GET coalescing, keep-alive sockets, request timeouts.
+- **Central config module (`src/config`).** Every numeric policy (rate limits, retries, snapshot budgets, page sizes, truncation caps) is env-overridable — nothing hard-coded at call sites. See `CONFIG_REFERENCE` for the full table. Legacy env names (`BITBUCKET_DEFAULT_PARALLELISM`, `BITBUCKET_MAX_SCAN_FILES`, …) still work.
+- **`version` pass-through on all mutations.** `update/merge/decline_pull_request` and `manage_comment` accept the entity `version` from a prior read (now included in `get_pull_request`/list outputs), turning 2-call mutations into 1 call, with an automatic refetch-and-retry on 409 conflicts.
+- **Cross-repo PR listing.** `list_pull_requests` without `repository` uses the dashboard endpoint (Server) — "my PRs across all repos" in one call.
+
+### Changed
+
+- **Diffs are raw unified diff text** (`Accept: text/plain`) — ~5–10× fewer tokens than the old per-line JSON objects with zero information loss (line numbers derive from `@@` headers). Applies to `get_pull_request_diff` and `get_commit_detail`; `get_commit_detail` gains `detail:"files"` for a body-less changed-file list.
+- **`get_file_content` reads a line window server-side in ONE call** (browse endpoint pages over lines; ≤5000/page) instead of metadata + full raw download; `full_content`/negative `start_line` still fetch whole files.
+- **`get_file_blame` fetches only the pages covering the requested window** — a 50-line blame in a 100k-line file is 1 call (was up to 100). Output is a compact commit legend + line spans.
+- **`get_pull_request` is 1 call for metadata** (merge commit + closed date + comment/task counts come from the PR resource itself) and at most 3–4 with `include_comments`/`include_file_changes`/`include_tasks` (tasks via the `blocker-comments` endpoint, DC 7.2+). Activities pagination is honest: server clamps at 500/page and truncation is reported (the old `limit=1000` silently lost data). `merged_by` is extracted from the same activities page that serves comments — no extra calls.
+- **`search_code`**: the redundant case-variant second query is removed (the index is case-insensitive per Atlassian docs); the zero-hit index-gap probe is a single one-page listing (was up to 40 calls); pagination stops with steering text at the search server's ~1000-result window; output is ripgrep-style text.
+- **All responses compacted**: no pretty-printed JSON, ISO-8601 dates, no argument echoes or derivable fields, bulk content as plain text blocks, all truncation explicitly marked, error details capped, text attachment downloads capped (config).
+- **Repo restructured**: `src/{config,core,formatting,handlers,tools,types}` with a canonical types barrel, `type` aliases only (no `interface`), and a tool registry that enforces group/availability filtering at dispatch (hidden tools are no longer callable by name). `BITBUCKET_TOOL_GROUPS` values are validated with warnings.
+
+### Removed (breaking — consolidation, same capabilities)
+
+| v2 tool | v3 replacement |
+|---|---|
+| `find_in_files` | `grep` (query = regex) |
+| `search_files` | `grep` (omit query; `glob`) |
+| `list_pr_tasks` | `get_pull_request` with `include_tasks: true` |
+| `create_pr_task` | `add_comment` with `severity: "BLOCKER"` |
+| `update_pr_task` | `manage_comment` `action: "edit"` |
+| `delete_pr_task` / `delete_comment` | `manage_comment` `action: "delete"` |
+| `set_pr_task_status` | `manage_comment` `action: "resolve"` / `"reopen"` |
+| `convert_pr_item` | `manage_comment` `action: "to_task"` / `"to_comment"` |
+| `set_pr_approval` | `set_review_status` `status: "APPROVED"` / `"UNAPPROVED"` |
+
+Update Claude Code permission allowlists (`mcp__bitbucket__*`) and prompts accordingly. 33 → 25 tools; tool-definition context cost drops ~30%.
+
 ## [2.3.1] - 2026-07-05
 
 ### Fixed

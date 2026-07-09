@@ -1,25 +1,36 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { BitbucketApiClient } from '../utils/api-client.js';
-import { formatServerResponse, formatCloudResponse, formatServerPRListItem, formatCloudPRListItem, formatServerCommit, formatCloudCommit } from '../utils/formatters.js';
-import { formatSuggestionComment } from '../utils/suggestion-formatter.js';
-import { appendAttachments, buildAttachmentMarkup } from '../utils/attachment-formatter.js';
 import { existsSync } from 'fs';
-import { DiffParser } from '../utils/diff-parser.js';
-import { 
-  BitbucketServerPullRequest, 
-  BitbucketCloudPullRequest, 
-  BitbucketServerActivity,
-  MergeInfo,
+import { BitbucketApiClient, encodeRepoPath } from '../core/api-client.js';
+import {
+  formatServerPullRequest,
+  formatCloudPullRequest,
+  formatServerPrListItem,
+  formatCloudPrListItem,
+  formatServerCommit,
+  formatCloudCommit,
+  compactCommit,
+} from '../formatting/formatters.js';
+import { formatSuggestionComment } from '../formatting/suggestion-formatter.js';
+import { appendAttachments, buildAttachmentMarkup } from '../formatting/attachment-formatter.js';
+import { DiffParser } from '../formatting/diff-parser.js';
+import {
+  capDetails,
+  compactObject,
+  errorContent,
+  isoDate,
+  jsonContent,
+  serverPage,
+  textContent,
+  truncateMarked,
+} from '../formatting/respond.js';
+import type {
   BitbucketCloudComment,
-  BitbucketCloudFileChange,
-  FormattedComment,
-  FormattedFileChange,
+  BitbucketServerActivity,
   CodeMatch,
-  MultipleMatchesError,
-  BitbucketServerCommit,
-  BitbucketCloudCommit,
-  FormattedCommit
-} from '../types/bitbucket.js';
+  FormattedComment,
+  FormattedCommit,
+  ToolResponse,
+} from '../types/index.js';
 import {
   isGetPullRequestArgs,
   isListPullRequestsArgs,
@@ -29,880 +40,971 @@ import {
   isMergePullRequestArgs,
   isListPrCommitsArgs,
   isDeclinePullRequestArgs,
-  isDeleteCommentArgs,
-  isListPrTasksArgs,
-  isCreatePrTaskArgs,
-  isUpdatePrTaskArgs,
-  isTaskIdArgs,
-  isConvertCommentToTaskArgs,
-  isSetPrTaskStatusArgs,
-  isConvertPrItemArgs,
-  AttachmentInput
-} from '../types/guards.js';
+  isManageCommentArgs,
+  AttachmentInput,
+} from '../tools/guards.js';
+
+// Pull-request tools. v3 call budget (Server):
+//   get_pull_request     1 call (metadata) … 3-4 with includes — merge info
+//                        now comes from the PR resource (properties.mergeCommit
+//                        + closedDate); merged_by is extracted from the same
+//                        activities page that serves comments (no extra call).
+//   list_pull_requests   1 call (+ cross-repo dashboard mode when repository omitted)
+//   create/update/merge/decline: 1 call when `version` is supplied (2 otherwise),
+//                        with one refetch-and-retry on 409 version conflicts.
+//   add_comment          1 call (+1 single-FILE diff when resolving code_snippet)
+//   manage_comment       1 call with `version` (2 otherwise) — replaces
+//                        delete_comment + all PR-task mutation tools (DC tasks
+//                        ARE comments with severity=BLOCKER).
 
 export class PullRequestHandlers {
   constructor(
     private apiClient: BitbucketApiClient,
-    private baseUrl: string,
-    private username: string
+    private baseUrl: string
   ) {}
 
-  /**
-   * Upload each attachment (Bitbucket Server / Data Center only) and append the
-   * resulting Markdown references to a comment body / PR description.
-   * Returns the body unchanged when there are no attachments.
-   */
+  private get cfg() {
+    return this.apiClient.getConfig();
+  }
+
+  private serverPrPath(workspace: string, repository: string, id?: number): string {
+    return `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests${id !== undefined ? `/${id}` : ''}`;
+  }
+
+  private cloudPrPath(workspace: string, repository: string, id?: number): string {
+    return `/repositories/${workspace}/${repository}/pullrequests${id !== undefined ? `/${id}` : ''}`;
+  }
+
+  // ── Attachments (upload + embed) ───────────────────────────────────────────
+
+  private async uploadMarkups(
+    workspace: string,
+    repository: string,
+    attachments: AttachmentInput[]
+  ): Promise<string[]> {
+    if (!this.apiClient.getIsServer()) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'Attachments are only supported on Bitbucket Server / Data Center (Cloud has no public attachment API).'
+      );
+    }
+    const markups: string[] = [];
+    for (const item of attachments) {
+      const filePath = typeof item === 'string' ? item : item.file_path;
+      const altText = typeof item === 'string' ? undefined : item.alt_text;
+      const render = typeof item === 'string' ? 'auto' : item.render || 'auto';
+      if (!filePath) throw new McpError(ErrorCode.InvalidParams, 'Each attachment requires a file_path');
+      if (!existsSync(filePath)) throw new McpError(ErrorCode.InvalidParams, `Attachment file not found: ${filePath}`);
+      const uploaded = await this.apiClient.uploadAttachment(workspace, repository, filePath);
+      if (!uploaded.ref) {
+        throw new McpError(ErrorCode.InternalError, `Attachment "${uploaded.name}" uploaded but no reference returned`);
+      }
+      markups.push(buildAttachmentMarkup(uploaded.ref, altText || uploaded.name, render));
+    }
+    return markups;
+  }
+
   private async uploadAndEmbed(
     workspace: string,
     repository: string,
     body: string,
     attachments?: AttachmentInput[]
   ): Promise<string> {
-    if (!attachments || attachments.length === 0) {
-      return body;
-    }
-    if (!this.apiClient.getIsServer()) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Attachments are only supported on Bitbucket Server / Data Center. ' +
-          'Bitbucket Cloud has no public REST API for attaching files to pull requests or comments.'
-      );
-    }
-
-    const markups: string[] = [];
-    for (const item of attachments) {
-      const filePath = typeof item === 'string' ? item : item.file_path;
-      const altText = typeof item === 'string' ? undefined : item.alt_text;
-      const render = typeof item === 'string' ? 'auto' : item.render || 'auto';
-
-      if (!filePath) {
-        throw new McpError(ErrorCode.InvalidParams, 'Each attachment requires a file_path');
-      }
-      if (!existsSync(filePath)) {
-        throw new McpError(ErrorCode.InvalidParams, `Attachment file not found: ${filePath}`);
-      }
-
-      const uploaded = await this.apiClient.uploadAttachment(workspace, repository, filePath);
-      if (!uploaded.ref) {
-        throw new McpError(
-          ErrorCode.InternalError,
-          `Attachment "${uploaded.name}" uploaded but no reference was returned to embed it`
-        );
-      }
-      markups.push(buildAttachmentMarkup(uploaded.ref, altText || uploaded.name, render));
-    }
-
-    return appendAttachments(body, markups);
+    if (!attachments || attachments.length === 0) return body;
+    return appendAttachments(body, await this.uploadMarkups(workspace, repository, attachments));
   }
 
-  private async getFilteredPullRequestDiff(
-    workspace: string,
-    repository: string,
-    pullRequestId: number,
-    filePath: string,
-    contextLines: number = 3
-  ): Promise<string> {
-    let apiPath: string;
-    let config: any = {};
+  // ── get_pull_request ───────────────────────────────────────────────────────
 
-    if (this.apiClient.getIsServer()) {
-      // Bitbucket Server API
-      apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pullRequestId}/diff`;
-      config.params = { contextLines };
-    } else {
-      // Bitbucket Cloud API
-      apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pullRequestId}/diff`;
-      config.params = { context: contextLines };
-    }
-
-    config.headers = { 'Accept': 'text/plain' };
-    
-    const rawDiff = await this.apiClient.makeRequest<string>('get', apiPath, undefined, config);
-
-    const diffParser = new DiffParser();
-    const sections = diffParser.parseDiffIntoSections(rawDiff);
-    
-    const filterOptions = {
-      filePath: filePath
-    };
-    
-    const filteredResult = diffParser.filterSections(sections, filterOptions);
-    const filteredDiff = diffParser.reconstructDiff(filteredResult.sections);
-
-    return filteredDiff;
-  }
-
-  async handleGetPullRequest(args: any) {
+  async handleGetPullRequest(args: any): Promise<ToolResponse> {
     if (!isGetPullRequestArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for get_pull_request'
-      );
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for get_pull_request');
     }
-
     const { workspace, repository, pull_request_id } = args;
+    const includeComments = args.include_comments !== false;
+    const includeFileChanges = args.include_file_changes !== false;
+    const includeTasks = args.include_tasks === true;
     const commentLimit =
       typeof args.comment_limit === 'number' && args.comment_limit > 0
         ? Math.floor(args.comment_limit)
-        : 20;
+        : this.cfg.output.commentDefaultLimit;
 
     try {
-      const apiPath = this.apiClient.getIsServer()
-        ? `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}`
-        : `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}`;
-      
-      const pr = await this.apiClient.makeRequest<any>('get', apiPath);
+      const isServer = this.apiClient.getIsServer();
+      const prPath = isServer
+        ? this.serverPrPath(workspace, repository, pull_request_id)
+        : this.cloudPrPath(workspace, repository, pull_request_id);
+      const pr = await this.apiClient.makeRequest<any>('get', prPath);
 
-      let mergeInfo: MergeInfo = {};
+      const result: Record<string, unknown> = isServer
+        ? formatServerPullRequest(pr, this.baseUrl)
+        : formatCloudPullRequest(pr);
+      const warnings: string[] = [];
 
-      if (this.apiClient.getIsServer() && pr.state === 'MERGED') {
-        try {
-          const activitiesPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/activities`;
-          const activitiesResponse = await this.apiClient.makeRequest<any>('get', activitiesPath, undefined, {
-            params: { limit: 100 }
-          });
-          
-          const activities = activitiesResponse.values || [];
-          const mergeActivity = activities.find((a: BitbucketServerActivity) => a.action === 'MERGED');
-          
-          if (mergeActivity) {
-            mergeInfo.mergeCommitHash = mergeActivity.commit?.id || null;
-            mergeInfo.mergedBy = mergeActivity.user?.displayName || null;
-            mergeInfo.mergedAt = new Date(mergeActivity.createdDate).toISOString();
-            
-            if (mergeActivity.commit?.id) {
-              try {
-                const commitPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/commits/${mergeActivity.commit.id}`;
-                const commitResponse = await this.apiClient.makeRequest<any>('get', commitPath);
-                mergeInfo.mergeCommitMessage = commitResponse.message || null;
-              } catch (commitError) {
-                console.error('Failed to fetch merge commit message:', commitError);
-              }
-            }
+      if (isServer) {
+        if (includeComments) {
+          const { comments, activeCount, totalCount, mergedBy, mergedAt, truncated } =
+            await this.fetchServerActivities(workspace, repository, pull_request_id, commentLimit, pr.state === 'MERGED');
+          result.active_comments = comments;
+          result.active_comment_count = activeCount;
+          result.total_comment_count = totalCount;
+          if (mergedBy) result.merged_by = mergedBy;
+          if (mergedAt && !result.closed_on) result.merged_on = mergedAt;
+          if (truncated) {
+            warnings.push(
+              `COMMENTS_TRUNCATED: activity pages hit the ${this.cfg.pagination.activitiesMaxPages}-page cap; counts cover only the fetched pages.`
+            );
           }
-        } catch (activitiesError) {
-          console.error('Failed to fetch PR activities:', activitiesError);
+        } else if (pr.state === 'MERGED') {
+          // Merge author/time live only in the activity stream — fetch one
+          // small page so metadata-only reads don't silently lose them.
+          const mergeInfo = await this.fetchMergeInfoSmall(workspace, repository, pull_request_id);
+          if (mergeInfo.mergedBy) result.merged_by = mergeInfo.mergedBy;
+          if (mergeInfo.mergedAt && !result.closed_on) result.merged_on = mergeInfo.mergedAt;
+        }
+        if (includeFileChanges) {
+          const changes = await this.fetchServerFileChanges(workspace, repository, pull_request_id);
+          result.file_changes = changes.files;
+          result.file_change_count = changes.files.length;
+          if (changes.truncated) {
+            warnings.push('FILE_CHANGES_TRUNCATED: the changes endpoint is single-page; the list is capped by the server.');
+          }
+        }
+        if (includeTasks) {
+          result.tasks = await this.fetchServerTasks(workspace, repository, pull_request_id);
+        }
+      } else {
+        if (includeComments) {
+          const { comments, activeCount, totalCount, truncated } = await this.fetchCloudComments(
+            workspace, repository, pull_request_id, commentLimit
+          );
+          result.active_comments = comments;
+          result.active_comment_count = activeCount;
+          result.total_comment_count = totalCount;
+          if (truncated) warnings.push('COMMENTS_TRUNCATED: comment pages hit the page-walk cap; counts cover fetched pages only.');
+        }
+        if (includeFileChanges) {
+          const { files, truncated } = await this.fetchCloudFileChanges(workspace, repository, pull_request_id);
+          result.file_changes = files;
+          result.file_change_count = files.length;
+          if (truncated) warnings.push('FILE_CHANGES_TRUNCATED: diffstat pages hit the page-walk cap.');
         }
       }
 
-      let comments: FormattedComment[] = [];
-      let activeCommentCount = 0;
-      let totalCommentCount = 0;
-      let fileChanges: FormattedFileChange[] = [];
-      let fileChangesSummary: any = null;
-
-      try {
-        const [commentsResult, fileChangesResult] = await Promise.all([
-          this.fetchPullRequestComments(workspace, repository, pull_request_id, commentLimit),
-          this.fetchPullRequestFileChanges(workspace, repository, pull_request_id)
-        ]);
-
-        comments = commentsResult.comments;
-        activeCommentCount = commentsResult.activeCount;
-        totalCommentCount = commentsResult.totalCount;
-        fileChanges = fileChangesResult.fileChanges;
-        fileChangesSummary = fileChangesResult.summary;
-      } catch (error) {
-        console.error('Failed to fetch additional PR data:', error);
-      }
-
-      const formattedResponse = this.apiClient.getIsServer() 
-        ? formatServerResponse(pr as BitbucketServerPullRequest, mergeInfo, this.baseUrl)
-        : formatCloudResponse(pr as BitbucketCloudPullRequest);
-
-      const enhancedResponse = {
-        ...formattedResponse,
-        active_comments: comments,
-        active_comment_count: activeCommentCount,
-        total_comment_count: totalCommentCount,
-        file_changes: fileChanges,
-        file_changes_summary: fileChangesSummary
-      };
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(enhancedResponse, null, 2),
-          },
-        ],
-      };
+      if (warnings.length > 0) result.warnings = warnings;
+      return jsonContent(result);
     } catch (error) {
-      return this.apiClient.handleApiError(error, `getting pull request ${pull_request_id} in ${workspace}/${repository}`);
+      return this.apiClient.handleApiError(error, `getting pull request ${pull_request_id} in ${workspace}/${repository}`) as ToolResponse;
     }
   }
 
-  async handleListPullRequests(args: any) {
-    if (!isListPullRequestsArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for list_pull_requests'
+  /** One small activities page just for merge author/time (merged PRs, comments off). */
+  private async fetchMergeInfoSmall(
+    workspace: string,
+    repository: string,
+    pullRequestId: number
+  ): Promise<{ mergedBy?: string; mergedAt?: string }> {
+    try {
+      const response = await this.apiClient.makeRequest<any>(
+        'get',
+        `${this.serverPrPath(workspace, repository, pullRequestId)}/activities`,
+        undefined,
+        { params: { limit: this.cfg.pagination.branchLookupLimit } }
       );
+      const mergeActivity: any = (response.values || []).find((a: any) => a.action === 'MERGED');
+      return mergeActivity
+        ? { mergedBy: mergeActivity.user?.displayName, mergedAt: isoDate(mergeActivity.createdDate) }
+        : {};
+    } catch {
+      return {}; // enrichment only — never fail the PR read for it
+    }
+  }
+
+  /**
+   * ONE paginated activities walk serves both the comment tree and (for
+   * merged PRs) merged-by extraction — the MERGED activity is in the stream.
+   */
+  private async fetchServerActivities(
+    workspace: string,
+    repository: string,
+    pullRequestId: number,
+    commentLimit: number,
+    wantMergeInfo: boolean
+  ): Promise<{
+    comments: FormattedComment[];
+    activeCount: number;
+    totalCount: number;
+    mergedBy?: string;
+    mergedAt?: string;
+    truncated: boolean;
+  }> {
+    const { pagination, output } = this.cfg;
+    const apiPath = `${this.serverPrPath(workspace, repository, pullRequestId)}/activities`;
+
+    const activities: BitbucketServerActivity[] = [];
+    let start = 0;
+    let truncated = false;
+    for (let page = 0; page < pagination.activitiesMaxPages; page++) {
+      const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
+        params: { limit: pagination.activitiesPageLimit, start },
+      });
+      activities.push(...(response.values || []));
+      if (!serverPage(response).hasMore) break;
+      if (page === pagination.activitiesMaxPages - 1) {
+        truncated = true;
+        break;
+      }
+      start = typeof response.nextPageStart === 'number' ? response.nextPageStart : start + (response.values?.length ?? 0);
     }
 
-    const { workspace, repository, state = 'OPEN', author, limit = 25, start = 0 } = args;
+    let mergedBy: string | undefined;
+    let mergedAt: string | undefined;
+    if (wantMergeInfo) {
+      const mergeActivity: any = activities.find((a: any) => a.action === 'MERGED');
+      if (mergeActivity) {
+        mergedBy = mergeActivity.user?.displayName;
+        mergedAt = isoDate(mergeActivity.createdDate);
+      }
+    }
+
+    const truncateText = (text: string) => truncateMarked(text, output.commentTextMax);
+    const processNested = (comment: any, anchor: any): FormattedComment => {
+      const formatted: FormattedComment = {
+        id: comment.id,
+        author: comment.author.displayName,
+        text: truncateText(comment.text),
+        created_on: isoDate(comment.createdDate) ?? '',
+        is_inline: !!anchor,
+        file_path: anchor?.path,
+        line_number: anchor?.line,
+        state: comment.state,
+      };
+      (formatted as any).version = comment.version;
+      if (comment.severity === 'BLOCKER') (formatted as any).is_task = true;
+      if (comment.comments?.length > 0) {
+        formatted.replies = comment.comments
+          .filter((reply: any) => reply.state !== 'RESOLVED' && !(anchor && anchor.orphaned === true))
+          .map((reply: any) => processNested(reply, anchor));
+      }
+      return formatted;
+    };
+    const countAll = (comment: any): number =>
+      1 + (comment.comments ?? []).reduce((sum: number, r: any) => sum + countAll(r), 0);
+    const countActive = (comment: any, anchor: any): number => {
+      let count = comment.state !== 'RESOLVED' && !(anchor && anchor.orphaned === true) ? 1 : 0;
+      count += (comment.comments ?? []).reduce((sum: number, r: any) => sum + countActive(r, anchor), 0);
+      return count;
+    };
+
+    const commentActivities = activities.filter((a: any) => a.action === 'COMMENTED' && a.comment);
+    const totalCount = commentActivities.reduce((sum: number, a: any) => sum + countAll(a.comment), 0);
+    const activeCount = commentActivities.reduce((sum: number, a: any) => sum + countActive(a.comment, a.commentAnchor), 0);
+    const comments = commentActivities
+      .filter((a: any) => a.comment.state !== 'RESOLVED' && !(a.commentAnchor && a.commentAnchor.orphaned === true))
+      .map((a: any) => processNested(a.comment, a.commentAnchor))
+      .slice(0, commentLimit);
+
+    return { comments, activeCount, totalCount, mergedBy, mergedAt, truncated };
+  }
+
+  private async fetchServerFileChanges(
+    workspace: string,
+    repository: string,
+    pullRequestId: number
+  ): Promise<{ files: Array<Record<string, unknown>>; truncated: boolean }> {
+    const response = await this.apiClient.makeRequest<any>(
+      'get',
+      `${this.serverPrPath(workspace, repository, pullRequestId)}/changes`,
+      undefined,
+      { params: { limit: this.cfg.pagination.changesLimit, withComments: false } }
+    );
+    const files = (response.values || []).map((change: any) =>
+      compactObject({
+        path: change.path?.toString,
+        status: ({ ADD: 'added', DELETE: 'removed', MOVE: 'renamed', RENAME: 'renamed' } as any)[change.type] ?? 'modified',
+        old_path: change.srcPath?.toString,
+      })
+    );
+    // PR /changes is single-page by design: start is ignored and results are
+    // truncated to min(limit, server cap) — surface it, never page.
+    return { files, truncated: response.isLastPage === false };
+  }
+
+  private async fetchServerTasks(workspace: string, repository: string, pullRequestId: number): Promise<unknown[]> {
+    try {
+      const apiPath = `${this.serverPrPath(workspace, repository, pullRequestId)}/blocker-comments`;
+      const values: any[] = [];
+      let start = 0;
+      let truncated = false;
+      for (let page = 0; page < this.cfg.pagination.activitiesMaxPages; page++) {
+        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
+          params: { limit: this.cfg.pagination.activitiesPageLimit, start },
+        });
+        values.push(...(response.values || []));
+        if (response.isLastPage !== false) break;
+        if (page === this.cfg.pagination.activitiesMaxPages - 1) {
+          truncated = true;
+          break;
+        }
+        start = typeof response.nextPageStart === 'number' ? response.nextPageStart : start + (response.values?.length ?? 0);
+      }
+      const tasks: unknown[] = values.map((t: any) =>
+        compactObject({
+          id: t.id,
+          version: t.version,
+          text: truncateMarked(t.text ?? '', this.cfg.output.commentTextMax),
+          author: t.author?.displayName || t.author?.name,
+          state: t.state || 'OPEN',
+          created_on: isoDate(t.createdDate),
+        })
+      );
+      if (truncated) tasks.push({ warning: 'TASKS_TRUNCATED: more task pages exist beyond the page-walk cap.' });
+      return tasks;
+    } catch (error: any) {
+      if (error?.status === 404) {
+        // Pre-7.2 instance: blocker-comments absent. Extremely unlikely on
+        // supported DC, but degrade honestly rather than failing the tool.
+        return [{ warning: 'blocker-comments endpoint unavailable on this instance; tasks not listed' }];
+      }
+      throw error;
+    }
+  }
+
+  /** Follow Cloud `next` cursors up to a bounded page count. */
+  private async fetchCloudPages(firstPath: string, params: any): Promise<{ values: any[]; truncated: boolean }> {
+    const values: any[] = [];
+    let url: string | null = firstPath;
+    let reqParams: any | undefined = params;
+    for (let page = 0; page < this.cfg.pagination.activitiesMaxPages && url; page++) {
+      const response: any = await this.apiClient.makeRequest<any>('get', url, undefined, reqParams ? { params: reqParams } : undefined);
+      values.push(...(response.values || []));
+      url = response.next || null; // absolute URL; axios overrides baseURL
+      reqParams = undefined;
+      if (!url) return { values, truncated: false };
+    }
+    return { values, truncated: url !== null };
+  }
+
+  private async fetchCloudComments(
+    workspace: string,
+    repository: string,
+    pullRequestId: number,
+    commentLimit: number
+  ): Promise<{ comments: FormattedComment[]; activeCount: number; totalCount: number; truncated: boolean }> {
+    const { values, truncated } = await this.fetchCloudPages(
+      `${this.cloudPrPath(workspace, repository, pullRequestId)}/comments`,
+      { pagelen: this.cfg.pagination.cloudCommentsPageLen }
+    );
+    const all = values as BitbucketCloudComment[];
+    const active = all.filter(c => !c.deleted && !c.resolved);
+    const comments = active.slice(0, commentLimit).map(c => ({
+      id: c.id,
+      author: c.user.display_name,
+      text: truncateMarked(c.content.raw, this.cfg.output.commentTextMax),
+      created_on: c.created_on,
+      is_inline: !!c.inline,
+      file_path: c.inline?.path,
+      line_number: c.inline?.to,
+    }));
+    return { comments, activeCount: active.length, totalCount: all.length, truncated };
+  }
+
+  private async fetchCloudFileChanges(
+    workspace: string,
+    repository: string,
+    pullRequestId: number
+  ): Promise<{ files: Array<Record<string, unknown>>; truncated: boolean }> {
+    const { values, truncated } = await this.fetchCloudPages(
+      `${this.cloudPrPath(workspace, repository, pullRequestId)}/diffstat`,
+      { pagelen: this.cfg.pagination.cloudCommentsPageLen }
+    );
+    // Cloud diffstat: `type` is the entity discriminator ("diffstat"); the
+    // real change kind is `status`, and paths live under new/old.
+    const files = values.map((stat: any) =>
+      compactObject({
+        path: stat.new?.path ?? stat.old?.path,
+        status: stat.status,
+        old_path: stat.status === 'renamed' ? stat.old?.path : undefined,
+      })
+    );
+    return { files, truncated };
+  }
+
+  // ── list_pull_requests ─────────────────────────────────────────────────────
+
+  async handleListPullRequests(args: any): Promise<ToolResponse> {
+    if (!isListPullRequestsArgs(args)) {
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for list_pull_requests');
+    }
+    const { workspace, repository, state = 'OPEN', author, role } = args;
+    const limit = args.limit ?? this.cfg.pagination.defaultListLimit;
+    const start = args.start ?? 0;
 
     try {
-      let apiPath: string;
-      let params: any = {};
+      // Cross-repo mode (Server): one dashboard call replaces a per-repo fan-out.
+      if (this.apiClient.getIsServer() && !repository) {
+        if (author) {
+          return errorContent(
+            'The cross-repo listing is scoped to the authenticated user and cannot filter by author — pass `repository` to filter by author, or use `role` instead.'
+          );
+        }
+        const params: any = { limit, start, order: 'NEWEST' };
+        if (state !== 'ALL') params.state = state;
+        if (role) params.role = role;
+        const response = await this.apiClient.makeRequest<any>('get', '/rest/api/latest/dashboard/pull-requests', undefined, { params });
+        const items = (response.values || []).map((pr: any) => ({
+          ...formatServerPrListItem(pr),
+          repository: `${pr.toRef.repository.project.key}/${pr.toRef.repository.slug}`,
+        }));
+        return jsonContent(
+          compactObject({
+            pull_requests: items,
+            scope: 'all repositories (dashboard)',
+            has_more: serverPage(response).hasMore || undefined,
+            next_start: serverPage(response).nextStart,
+          })
+        );
+      }
+      if (!repository) {
+        return errorContent('repository is required (cross-repo listing is Server-only).');
+      }
+      if (role) {
+        return errorContent('`role` applies to the cross-repo listing only — omit `repository` to use it, or filter by `author` here.');
+      }
 
+      let apiPath: string;
+      let params: any;
       if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API
-        apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests`;
-        params = {
-          state: state === 'ALL' ? undefined : state,
-          limit,
-          start,
-        };
+        apiPath = this.serverPrPath(workspace, repository);
+        // DC supports state=ALL natively; omitting the param would default to OPEN.
+        params = { state, limit, start };
         if (author) {
           params['role.1'] = 'AUTHOR';
           params['username.1'] = author;
         }
       } else {
-        // Bitbucket Cloud API
-        apiPath = `/repositories/${workspace}/${repository}/pullrequests`;
+        apiPath = this.cloudPrPath(workspace, repository);
         params = {
-          state: state === 'ALL' ? undefined : state,
+          // Cloud has no ALL value — repeat the state param for each state.
+          state: state === 'ALL' ? ['OPEN', 'MERGED', 'DECLINED'] : state,
           pagelen: limit,
           page: Math.floor(start / limit) + 1,
         };
-        if (author) {
-          params['q'] = `author.username="${author}"`;
-        }
+        // Cloud removed `username` (GDPR); nickname is the queryable field.
+        if (author) params['q'] = `author.nickname="${author}"`;
       }
 
-      const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
-
-      let pullRequests: any[] = [];
-      let totalCount = 0;
-      let nextPageStart = null;
-
-      if (this.apiClient.getIsServer()) {
-        pullRequests = (response.values || []).map((pr: BitbucketServerPullRequest) =>
-          formatServerPRListItem(pr, this.baseUrl)
-        );
-        totalCount = response.size || 0;
-        if (!response.isLastPage && response.nextPageStart !== undefined) {
-          nextPageStart = response.nextPageStart;
-        }
-      } else {
-        pullRequests = (response.values || []).map((pr: BitbucketCloudPullRequest) =>
-          formatCloudPRListItem(pr)
-        );
-        totalCount = response.size || 0;
-        if (response.next) {
-          nextPageStart = start + limit;
-        }
-      }
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              pull_requests: pullRequests,
-              total_count: totalCount,
-              start,
-              limit,
-              has_more: nextPageStart !== null,
-              next_start: nextPageStart,
-            }, null, 2),
-          },
-        ],
-      };
+      const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
+        params,
+        // Cloud's ALL expansion needs repeated bare `state=` params — axios's
+        // default array serialization (`state[]=`) is rejected.
+        paramsSerializer: (p: any) => {
+          const search = new URLSearchParams();
+          for (const [k, v] of Object.entries(p)) {
+            if (v === undefined || v === null) continue;
+            if (Array.isArray(v)) for (const item of v) search.append(k, String(item));
+            else search.append(k, String(v));
+          }
+          return search.toString();
+        },
+      });
+      const isServer = this.apiClient.getIsServer();
+      const items = (response.values || []).map((pr: any) =>
+        isServer ? formatServerPrListItem(pr) : formatCloudPrListItem(pr)
+      );
+      const hasMore = isServer ? serverPage(response).hasMore : !!response.next;
+      return jsonContent(
+        compactObject({
+          pull_requests: items,
+          total_count: response.size || undefined,
+          has_more: hasMore || undefined,
+          next_start: hasMore ? (isServer ? response.nextPageStart : start + limit) : undefined,
+        })
+      );
     } catch (error) {
-      return this.apiClient.handleApiError(error, `listing pull requests in ${workspace}/${repository}`);
+      return this.apiClient.handleApiError(error, `listing pull requests in ${workspace}/${repository ?? '(all)'}`) as ToolResponse;
     }
   }
 
-  async handleCreatePullRequest(args: any) {
-    if (!isCreatePullRequestArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for create_pull_request'
-      );
-    }
+  // ── create_pull_request ────────────────────────────────────────────────────
 
+  async handleCreatePullRequest(args: any): Promise<ToolResponse> {
+    if (!isCreatePullRequestArgs(args)) {
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for create_pull_request');
+    }
     const { workspace, repository, title, source_branch, destination_branch, description, reviewers, close_source_branch, attachments } = args;
 
     try {
-      // Upload any attachments and embed their references into the description (Server only).
-      // Attachments are repo-scoped, so they can be uploaded before the PR exists.
       const finalDescription = await this.uploadAndEmbed(workspace, repository, description || '', attachments);
-
       let apiPath: string;
       let requestBody: any;
-
       if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API
-        apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests`;
+        apiPath = this.serverPrPath(workspace, repository);
+        const refRepo = { slug: repository, project: { key: workspace } };
         requestBody = {
           title,
           description: finalDescription,
-          fromRef: {
-            id: `refs/heads/${source_branch}`,
-            repository: {
-              slug: repository,
-              project: {
-                key: workspace
-              }
-            }
-          },
-          toRef: {
-            id: `refs/heads/${destination_branch}`,
-            repository: {
-              slug: repository,
-              project: {
-                key: workspace
-              }
-            }
-          },
-          reviewers: reviewers?.map(r => ({ user: { name: r } })) || []
+          fromRef: { id: `refs/heads/${source_branch}`, repository: refRepo },
+          toRef: { id: `refs/heads/${destination_branch}`, repository: refRepo },
+          reviewers: reviewers?.map((r: string) => ({ user: { name: r } })) || [],
         };
       } else {
-        // Bitbucket Cloud API
-        apiPath = `/repositories/${workspace}/${repository}/pullrequests`;
+        apiPath = this.cloudPrPath(workspace, repository);
         requestBody = {
           title,
           description: finalDescription,
-          source: {
-            branch: {
-              name: source_branch
-            }
-          },
-          destination: {
-            branch: {
-              name: destination_branch
-            }
-          },
+          source: { branch: { name: source_branch } },
+          destination: { branch: { name: destination_branch } },
           close_source_branch: close_source_branch || false,
-          reviewers: reviewers?.map(r => ({ username: r })) || []
+          reviewers: reviewers?.map((r: string) => ({ username: r })) || [],
         };
       }
-
       const pr = await this.apiClient.makeRequest<any>('post', apiPath, requestBody);
-      
-      const formattedResponse = this.apiClient.getIsServer() 
-        ? formatServerResponse(pr as BitbucketServerPullRequest, undefined, this.baseUrl)
-        : formatCloudResponse(pr as BitbucketCloudPullRequest);
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              message: 'Pull request created successfully',
-              pull_request: formattedResponse
-            }, null, 2),
-          },
-        ],
-      };
+      return jsonContent(
+        compactObject({
+          id: pr.id,
+          version: pr.version,
+          state: pr.state,
+          web_url: this.apiClient.getIsServer()
+            ? `${this.baseUrl}/projects/${workspace}/repos/${repository}/pull-requests/${pr.id}`
+            : pr.links?.html?.href,
+        })
+      );
     } catch (error) {
-      return this.apiClient.handleApiError(error, `creating pull request in ${workspace}/${repository}`);
+      return this.apiClient.handleApiError(error, `creating pull request in ${workspace}/${repository}`) as ToolResponse;
     }
   }
 
-  async handleUpdatePullRequest(args: any) {
-    if (!isUpdatePullRequestArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for update_pull_request'
-      );
-    }
+  // ── update_pull_request ────────────────────────────────────────────────────
 
+  async handleUpdatePullRequest(args: any): Promise<ToolResponse> {
+    if (!isUpdatePullRequestArgs(args)) {
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for update_pull_request');
+    }
     const { workspace, repository, pull_request_id, title, description, destination_branch, reviewers, attachments } = args;
 
     try {
-      let apiPath: string;
-      let requestBody: any = {};
-
       if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API
-        apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}`;
-        
-        // First get the current PR to get version number and existing data
-        const currentPr = await this.apiClient.makeRequest<any>('get', apiPath);
-        
-        requestBody.version = currentPr.version;
+        const apiPath = this.serverPrPath(workspace, repository, pull_request_id);
+        // Skip the read when the caller supplied everything a blind write
+        // needs: version + explicit reviewers + (description or no attachments).
+        const canSkipRead =
+          typeof args.version === 'number' &&
+          reviewers !== undefined &&
+          (description !== undefined || !attachments?.length);
+        const currentPr = canSkipRead ? undefined : await this.apiClient.makeRequest<any>('get', apiPath);
+
+        const requestBody: any = { version: args.version ?? currentPr.version };
         if (title !== undefined) requestBody.title = title;
-        // Embed attachments into the description (Server only). When only attachments are
-        // provided (no description), append to the existing PR description instead of wiping it.
-        if (attachments?.length || description !== undefined) {
-          const baseDescription = description !== undefined ? description : (currentPr.description || '');
-          requestBody.description = await this.uploadAndEmbed(workspace, repository, baseDescription, attachments);
+        const markups = attachments?.length ? await this.uploadMarkups(workspace, repository, attachments) : [];
+        if (markups.length > 0 || description !== undefined) {
+          const baseDescription = description !== undefined ? description : (currentPr?.description || '');
+          requestBody.description = appendAttachments(baseDescription, markups);
         }
         if (destination_branch !== undefined) {
-          requestBody.toRef = {
-            id: `refs/heads/${destination_branch}`,
-            repository: {
-              slug: repository,
-              project: {
-                key: workspace
-              }
-            }
-          };
+          requestBody.toRef = { id: `refs/heads/${destination_branch}`, repository: { slug: repository, project: { key: workspace } } };
         }
-        
-        // Handle reviewers: preserve existing ones if not explicitly updating
         if (reviewers !== undefined) {
-          // User wants to update reviewers
-          // Create a map of existing reviewers for preservation of approval status
-          const existingReviewersMap = new Map(
-            currentPr.reviewers.map((r: any) => [r.user.name, r])
-          );
-          
-          requestBody.reviewers = reviewers.map(username => {
-            const existing = existingReviewersMap.get(username);
-            if (existing) {
-              // Preserve existing reviewer's full data including approval status
-              return existing;
-            } else {
-              // Add new reviewer (without approval status)
-              return { user: { name: username } };
-            }
-          });
+          const existingByName = new Map((currentPr?.reviewers ?? []).map((r: any) => [r.user.name, r]));
+          requestBody.reviewers = reviewers.map((username: string) => existingByName.get(username) ?? { user: { name: username } });
         } else {
-          // No reviewers provided - preserve existing reviewers with their full data
           requestBody.reviewers = currentPr.reviewers;
         }
-      } else {
-        // Bitbucket Cloud API
-        apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}`;
 
-        if (title !== undefined) requestBody.title = title;
-        if (attachments?.length || description !== undefined) {
-          // uploadAndEmbed throws a clear "Server only" error on Cloud when attachments are present
-          requestBody.description = await this.uploadAndEmbed(workspace, repository, description || '', attachments);
-        }
-        if (destination_branch !== undefined) {
-          requestBody.destination = {
-            branch: {
-              name: destination_branch
+        const pr = await this.withVersionRetry(
+          () => this.apiClient.makeRequest<any>('put', apiPath, requestBody),
+          async () => {
+            const fresh = await this.apiClient.makeRequest<any>('get', apiPath);
+            requestBody.version = fresh.version;
+            if (reviewers === undefined) requestBody.reviewers = fresh.reviewers;
+            // Attachments-only edits derived the description from the
+            // pre-conflict read — rebuild from the fresh one so the retry
+            // doesn't overwrite the concurrent description change.
+            if (description === undefined && markups.length > 0) {
+              requestBody.description = appendAttachments(fresh.description || '', markups);
             }
-          };
-        }
-        if (reviewers !== undefined) {
-          requestBody.reviewers = reviewers.map(r => ({ username: r }));
-        }
-      }
-
-      const pr = await this.apiClient.makeRequest<any>('put', apiPath, requestBody);
-      
-      const formattedResponse = this.apiClient.getIsServer() 
-        ? formatServerResponse(pr as BitbucketServerPullRequest, undefined, this.baseUrl)
-        : formatCloudResponse(pr as BitbucketCloudPullRequest);
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              message: 'Pull request updated successfully',
-              pull_request: formattedResponse
-            }, null, 2),
           },
-        ],
-      };
-    } catch (error) {
-      return this.apiClient.handleApiError(error, `updating pull request ${pull_request_id} in ${workspace}/${repository}`);
-    }
-  }
-
-  async handleAddComment(args: any) {
-    if (!isAddCommentArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for add_comment'
-      );
-    }
-
-    let { 
-      workspace, 
-      repository, 
-      pull_request_id, 
-      comment_text, 
-      parent_comment_id, 
-      file_path, 
-      line_number, 
-      line_type,
-      suggestion,
-      suggestion_end_line,
-      code_snippet,
-      search_context,
-      match_strategy = 'strict',
-      attachments
-    } = args;
-
-    let sequentialPosition: number | undefined;
-    if (code_snippet && !line_number && file_path) {
-      try {
-        const resolved = await this.resolveLineFromCode(
-          workspace,
-          repository,
-          pull_request_id,
-          file_path,
-          code_snippet,
-          search_context,
-          match_strategy
+          typeof args.version === 'number'
         );
-        
-        line_number = resolved.line_number;
-        line_type = resolved.line_type;
-        sequentialPosition = resolved.sequential_position;
-      } catch (error) {
-        throw error;
-      }
-    }
-
-    if (suggestion && (!file_path || !line_number)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Suggestions require file_path and line_number to be specified'
-      );
-    }
-
-    const isInlineComment = file_path !== undefined && line_number !== undefined;
-
-    let finalCommentText = comment_text;
-    if (suggestion) {
-      finalCommentText = formatSuggestionComment(
-        comment_text,
-        suggestion,
-        line_number,
-        suggestion_end_line || line_number
-      );
-    }
-
-    try {
-      // Upload any attachments and embed their references into the comment body (Server only)
-      finalCommentText = await this.uploadAndEmbed(workspace, repository, finalCommentText, attachments);
-
-      let apiPath: string;
-      let requestBody: any;
-
-      if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API
-        apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments`;
-        requestBody = {
-          text: finalCommentText
-        };
-        
-        if (parent_comment_id !== undefined) {
-          requestBody.parent = { id: parent_comment_id };
-        }
-        
-        if (isInlineComment) {
-          requestBody.anchor = {
-            line: line_number,
-            lineType: line_type || 'CONTEXT', 
-            fileType: line_type === 'REMOVED' ? 'FROM' : 'TO',
-            path: file_path,
-            diffType: 'EFFECTIVE'
-          };
-          
-        }
-      } else {
-        // Bitbucket Cloud API
-        apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/comments`;
-        requestBody = {
-          content: {
-            raw: finalCommentText
-          }
-        };
-        
-        if (parent_comment_id !== undefined) {
-          requestBody.parent = { id: parent_comment_id };
-        }
-        
-        if (isInlineComment) {
-          requestBody.inline = {
-            to: line_number,
-            path: file_path
-          };
-        }
+        return jsonContent(compactObject({ id: pr.id, version: pr.version, state: pr.state, title: pr.title }));
       }
 
-      const comment = await this.apiClient.makeRequest<any>('post', apiPath, requestBody);
-
-      const responseMessage = suggestion 
-        ? 'Comment with code suggestion added successfully'
-        : (isInlineComment ? 'Inline comment added successfully' : 'Comment added successfully');
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              message: responseMessage,
-              comment: {
-                id: comment.id,
-                text: this.apiClient.getIsServer() ? comment.text : comment.content.raw,
-                author: this.apiClient.getIsServer() ? comment.author.displayName : comment.user.display_name,
-                created_on: this.apiClient.getIsServer() ? new Date(comment.createdDate).toLocaleString() : comment.created_on,
-                file_path: isInlineComment ? file_path : undefined,
-                line_number: isInlineComment ? line_number : undefined,
-                line_type: isInlineComment ? (line_type || 'CONTEXT') : undefined,
-                has_suggestion: !!suggestion,
-                suggestion_lines: suggestion ? (suggestion_end_line ? `${line_number}-${suggestion_end_line}` : `${line_number}`) : undefined
-              }
-            }, null, 2),
-          },
-        ],
-      };
+      // Cloud
+      const apiPath = this.cloudPrPath(workspace, repository, pull_request_id);
+      const requestBody: any = {};
+      if (title !== undefined) requestBody.title = title;
+      if (attachments?.length || description !== undefined) {
+        requestBody.description = await this.uploadAndEmbed(workspace, repository, description || '', attachments);
+      }
+      if (destination_branch !== undefined) requestBody.destination = { branch: { name: destination_branch } };
+      if (reviewers !== undefined) requestBody.reviewers = reviewers.map((r: string) => ({ username: r }));
+      const pr = await this.apiClient.makeRequest<any>('put', apiPath, requestBody);
+      return jsonContent(compactObject({ id: pr.id, state: pr.state, title: pr.title }));
     } catch (error) {
-      return this.apiClient.handleApiError(error, `adding ${isInlineComment ? 'inline ' : ''}comment to pull request ${pull_request_id} in ${workspace}/${repository}`);
+      return this.apiClient.handleApiError(error, `updating pull request ${pull_request_id} in ${workspace}/${repository}`) as ToolResponse;
     }
   }
 
-  async handleMergePullRequest(args: any) {
-    if (!isMergePullRequestArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for merge_pull_request'
-      );
+  /**
+   * Run a versioned write. Semantics depend on where the version came from:
+   *  - caller-supplied `version` = explicit compare-and-swap — a 409 is
+   *    surfaced (silently retrying would clobber the concurrent edit the
+   *    caller asked us to detect);
+   *  - server-fetched version = convenience — refresh once and retry.
+   */
+  private async withVersionRetry<T>(
+    write: () => Promise<T>,
+    refresh: () => Promise<void>,
+    callerSuppliedVersion: boolean
+  ): Promise<T> {
+    try {
+      return await write();
+    } catch (error: any) {
+      if (error?.status === 409) {
+        if (callerSuppliedVersion) {
+          throw {
+            ...error,
+            message:
+              'Concurrent modification detected: the supplied version is stale. ' +
+              'Re-read the entity for its current version, or omit `version` to write against the latest state.',
+          };
+        }
+        await refresh();
+        return await write();
+      }
+      throw error;
     }
+  }
 
+  // ── merge / decline ────────────────────────────────────────────────────────
+
+  async handleMergePullRequest(args: any): Promise<ToolResponse> {
+    if (!isMergePullRequestArgs(args)) {
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for merge_pull_request');
+    }
     const { workspace, repository, pull_request_id, merge_strategy, close_source_branch, commit_message } = args;
 
     try {
-      let apiPath: string;
-      let requestBody: any = {};
-
       if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API
-        apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/merge`;
-        
-        // Get current PR version
-        const prPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}`;
-        const currentPr = await this.apiClient.makeRequest<any>('get', prPath);
-        
-        requestBody.version = currentPr.version;
-        if (commit_message) {
-          requestBody.message = commit_message;
-        }
-      } else {
-        // Bitbucket Cloud API
-        apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/merge`;
-        
-        if (merge_strategy) {
-          requestBody.merge_strategy = merge_strategy;
-        }
-        if (close_source_branch !== undefined) {
-          requestBody.close_source_branch = close_source_branch;
-        }
-        if (commit_message) {
-          requestBody.message = commit_message;
-        }
-      }
-
-      const result = await this.apiClient.makeRequest<any>('post', apiPath, requestBody);
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              message: 'Pull request merged successfully',
-              merge_commit: this.apiClient.getIsServer() ? result.properties?.mergeCommit : result.merge_commit?.hash,
-              pull_request_id
-            }, null, 2),
+        const mergePath = `${this.serverPrPath(workspace, repository, pull_request_id)}/merge`;
+        const requestBody: any = {
+          version:
+            args.version ??
+            (await this.apiClient.makeRequest<any>('get', this.serverPrPath(workspace, repository, pull_request_id))).version,
+        };
+        if (commit_message) requestBody.message = commit_message;
+        const result = await this.withVersionRetry(
+          () => this.apiClient.makeRequest<any>('post', mergePath, requestBody),
+          async () => {
+            const fresh = await this.apiClient.makeRequest<any>('get', this.serverPrPath(workspace, repository, pull_request_id));
+            requestBody.version = fresh.version;
           },
-        ],
-      };
-    } catch (error) {
-      return this.apiClient.handleApiError(error, `merging pull request ${pull_request_id} in ${workspace}/${repository}`);
-    }
-  }
-
-  private async fetchPullRequestComments(
-    workspace: string,
-    repository: string,
-    pullRequestId: number,
-    commentLimit = 20
-  ): Promise<{ comments: FormattedComment[]; activeCount: number; totalCount: number }> {
-    try {
-      let comments: FormattedComment[] = [];
-      let activeCount = 0;
-      let totalCount = 0;
-
-      if (this.apiClient.getIsServer()) {
-        const processNestedComments = (comment: any, anchor: any): FormattedComment => {
-          const formattedComment: FormattedComment = {
-            id: comment.id,
-            author: comment.author.displayName,
-            text: comment.text,
-            created_on: new Date(comment.createdDate).toISOString(),
-            is_inline: !!anchor,
-            file_path: anchor?.path,
-            line_number: anchor?.line,
-            state: comment.state
-          };
-
-          if (comment.comments && comment.comments.length > 0) {
-            formattedComment.replies = comment.comments
-              .filter((reply: any) => {
-                if (reply.state === 'RESOLVED') return false;
-                if (anchor && anchor.orphaned === true) return false;
-                return true;
-              })
-              .map((reply: any) => processNestedComments(reply, anchor));
-          }
-
-          return formattedComment;
-        };
-
-        const countAllComments = (comment: any): number => {
-          let count = 1;
-          if (comment.comments && comment.comments.length > 0) {
-            count += comment.comments.reduce((sum: number, reply: any) => sum + countAllComments(reply), 0);
-          }
-          return count;
-        };
-
-        const countActiveComments = (comment: any, anchor: any): number => {
-          let count = 0;
-          
-          if (comment.state !== 'RESOLVED' && (!anchor || anchor.orphaned !== true)) {
-            count = 1;
-          }
-          
-          if (comment.comments && comment.comments.length > 0) {
-            count += comment.comments.reduce((sum: number, reply: any) => sum + countActiveComments(reply, anchor), 0);
-          }
-          
-          return count;
-        };
-
-        const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pullRequestId}/activities`;
-        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
-          params: { limit: 1000 }
-        });
-
-        const activities = response.values || [];
-        
-        const commentActivities = activities.filter((a: any) => 
-          a.action === 'COMMENTED' && a.comment
+          typeof args.version === 'number'
         );
-
-        totalCount = commentActivities.reduce((sum: number, activity: any) => {
-          return sum + countAllComments(activity.comment);
-        }, 0);
-
-        activeCount = commentActivities.reduce((sum: number, activity: any) => {
-          return sum + countActiveComments(activity.comment, activity.commentAnchor);
-        }, 0);
-
-        const processedComments = commentActivities
-          .filter((a: any) => {
-            const c = a.comment;
-            const anchor = a.commentAnchor;
-            
-            if (c.state === 'RESOLVED') return false;
-            if (anchor && anchor.orphaned === true) return false;
-            
-            return true;
-          })
-          .map((a: any) => processNestedComments(a.comment, a.commentAnchor));
-
-        comments = processedComments.slice(0, commentLimit);
-      } else {
-        const apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pullRequestId}/comments`;
-        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
-          params: { pagelen: 100 }
-        });
-
-        const allComments = response.values || [];
-        totalCount = allComments.length;
-
-        const activeComments = allComments
-          .filter((c: BitbucketCloudComment) => !c.deleted && !c.resolved)
-          .slice(0, commentLimit);
-
-        activeCount = allComments.filter((c: BitbucketCloudComment) => !c.deleted && !c.resolved).length;
-
-        comments = activeComments.map((c: BitbucketCloudComment) => ({
-          id: c.id,
-          author: c.user.display_name,
-          text: c.content.raw,
-          created_on: c.created_on,
-          is_inline: !!c.inline,
-          file_path: c.inline?.path,
-          line_number: c.inline?.to
-        }));
+        // The target branch just moved — drop its memoized head so snapshot
+        // reads immediately see the merged content.
+        const targetBranch: string | undefined = result?.toRef?.displayId;
+        if (targetBranch) this.apiClient.invalidateRef(workspace, repository, targetBranch);
+        this.apiClient.invalidateRef(workspace, repository, undefined);
+        return jsonContent(
+          compactObject({ merged: true, pull_request_id, merge_commit: result.properties?.mergeCommit?.id, state: result.state })
+        );
       }
 
-      return { comments, activeCount, totalCount };
+      const requestBody: any = {};
+      // Tool enum uses hyphens; the Cloud API wants underscores.
+      if (merge_strategy) requestBody.merge_strategy = merge_strategy.replace(/-/g, '_');
+      if (close_source_branch !== undefined) requestBody.close_source_branch = close_source_branch;
+      if (commit_message) requestBody.message = commit_message;
+      const result = await this.apiClient.makeRequest<any>(
+        'post',
+        `${this.cloudPrPath(workspace, repository, pull_request_id)}/merge`,
+        requestBody
+      );
+      const cloudTarget: string | undefined = result?.destination?.branch?.name;
+      if (cloudTarget) this.apiClient.invalidateRef(workspace, repository, cloudTarget);
+      this.apiClient.invalidateRef(workspace, repository, undefined);
+      return jsonContent(compactObject({ merged: true, pull_request_id, merge_commit: result.merge_commit?.hash }));
     } catch (error) {
-      console.error('Failed to fetch comments:', error);
-      return { comments: [], activeCount: 0, totalCount: 0 };
+      return this.apiClient.handleApiError(error, `merging pull request ${pull_request_id} in ${workspace}/${repository}`) as ToolResponse;
     }
   }
 
-  private async fetchPullRequestFileChanges(
-    workspace: string,
-    repository: string,
-    pullRequestId: number
-  ): Promise<{ fileChanges: FormattedFileChange[]; summary: any }> {
+  async handleDeclinePullRequest(args: any): Promise<ToolResponse> {
+    if (!isDeclinePullRequestArgs(args)) {
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for decline_pull_request');
+    }
+    const { workspace, repository, pull_request_id, comment } = args;
+
     try {
-      let fileChanges: FormattedFileChange[] = [];
-      let totalLinesAdded = 0;
-      let totalLinesRemoved = 0;
-
       if (this.apiClient.getIsServer()) {
-        const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pullRequestId}/changes`;
-        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
-          params: { limit: 1000 }
-        });
-
-        const changes = response.values || [];
-
-        fileChanges = changes.map((change: any) => {
-          let status: 'added' | 'modified' | 'removed' | 'renamed' = 'modified';
-          if (change.type === 'ADD') status = 'added';
-          else if (change.type === 'DELETE') status = 'removed';
-          else if (change.type === 'MOVE' || change.type === 'RENAME') status = 'renamed';
-
-          return {
-            path: change.path.toString,
-            status,
-            old_path: change.srcPath?.toString
-          };
-        });
+        const declinePath = `${this.serverPrPath(workspace, repository, pull_request_id)}/decline`;
+        let version =
+          args.version ??
+          (await this.apiClient.makeRequest<any>('get', this.serverPrPath(workspace, repository, pull_request_id))).version;
+        await this.withVersionRetry(
+          () => this.apiClient.makeRequest('post', declinePath, undefined, { params: { version } }),
+          async () => {
+            const fresh = await this.apiClient.makeRequest<any>('get', this.serverPrPath(workspace, repository, pull_request_id));
+            version = fresh.version;
+          },
+          typeof args.version === 'number'
+        );
       } else {
-        const apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pullRequestId}/diffstat`;
-        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
-          params: { pagelen: 100 }
-        });
-
-        const diffstats = response.values || [];
-
-        fileChanges = diffstats.map((stat: BitbucketCloudFileChange) => {
-          totalLinesAdded += stat.lines_added;
-          totalLinesRemoved += stat.lines_removed;
-
-          return {
-            path: stat.path,
-            status: stat.type,
-            old_path: stat.old?.path
-          };
-        });
+        // Cloud decline takes no version — no read needed.
+        await this.apiClient.makeRequest('post', `${this.cloudPrPath(workspace, repository, pull_request_id)}/decline`);
       }
 
-      const summary = {
-        total_files: fileChanges.length
-      };
+      let commentNote = '';
+      if (comment) {
+        try {
+          const commentResult = await this.handleAddComment({ workspace, repository, pull_request_id, comment_text: comment });
+          commentNote = commentResult.isError
+            ? ` Comment FAILED: ${String((commentResult.content[0] as any)?.text ?? 'unknown error')}`
+            : ' Comment added.';
+        } catch (commentError: any) {
+          commentNote = ` Comment FAILED: ${commentError?.message ?? commentError}`;
+        }
+      }
+      return textContent(`Pull request #${pull_request_id} declined.${commentNote}`);
+    } catch (error: any) {
+      if (error?.isAxiosError) {
+        return this.apiClient.handleApiError(error, `declining pull request ${pull_request_id} in ${workspace}/${repository}`) as ToolResponse;
+      }
+      const details = capDetails(error?.response?.data, this.cfg.output.errorDetailsMax);
+      return errorContent(`Failed to decline pull request: ${error?.message ?? error}${details ? `\ndetails: ${details}` : ''}`);
+    }
+  }
 
-      return { fileChanges, summary };
+  // ── add_comment (comments, replies, inline, suggestions, tasks) ────────────
+
+  async handleAddComment(args: any): Promise<ToolResponse> {
+    if (!isAddCommentArgs(args)) {
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for add_comment');
+    }
+    let {
+      workspace, repository, pull_request_id, comment_text, parent_comment_id,
+      file_path, line_number, line_type, suggestion, suggestion_end_line,
+      code_snippet, search_context, match_strategy = 'strict', severity, attachments,
+    } = args;
+
+    if (code_snippet && !line_number && file_path) {
+      const resolved = await this.resolveLineFromCode(
+        workspace, repository, pull_request_id, file_path, code_snippet, search_context, match_strategy
+      );
+      line_number = resolved.line_number;
+      line_type = resolved.line_type;
+    }
+    if (suggestion && (!file_path || !line_number)) {
+      throw new McpError(ErrorCode.InvalidParams, 'Suggestions require file_path and line_number');
+    }
+    const isInline = file_path !== undefined && line_number !== undefined;
+
+    let finalText = comment_text;
+    if (suggestion) {
+      finalText = formatSuggestionComment(comment_text, suggestion, line_number, suggestion_end_line || line_number);
+    }
+
+    try {
+      finalText = await this.uploadAndEmbed(workspace, repository, finalText, attachments);
+
+      let apiPath: string;
+      let requestBody: any;
+      if (this.apiClient.getIsServer()) {
+        apiPath = `${this.serverPrPath(workspace, repository, pull_request_id)}/comments`;
+        requestBody = { text: finalText };
+        if (severity === 'BLOCKER') requestBody.severity = 'BLOCKER';
+        if (parent_comment_id !== undefined) requestBody.parent = { id: parent_comment_id };
+        if (isInline) {
+          requestBody.anchor = {
+            line: line_number,
+            lineType: line_type || 'CONTEXT',
+            fileType: line_type === 'REMOVED' ? 'FROM' : 'TO',
+            path: file_path,
+            diffType: 'EFFECTIVE',
+          };
+        }
+      } else {
+        if (severity === 'BLOCKER') {
+          return errorContent('Tasks (severity=BLOCKER) are only supported on Bitbucket Server / Data Center.');
+        }
+        apiPath = `${this.cloudPrPath(workspace, repository, pull_request_id)}/comments`;
+        requestBody = { content: { raw: finalText } };
+        if (parent_comment_id !== undefined) requestBody.parent = { id: parent_comment_id };
+        if (isInline) requestBody.inline = { to: line_number, path: file_path };
+      }
+
+      const comment = await this.apiClient.makeRequest<any>('post', apiPath, requestBody);
+      return jsonContent(
+        compactObject({
+          id: comment.id,
+          version: comment.version,
+          is_task: severity === 'BLOCKER' || undefined,
+          file_path: isInline ? file_path : undefined,
+          line_number: isInline ? line_number : undefined,
+        })
+      );
     } catch (error) {
-      console.error('Failed to fetch file changes:', error);
-      return {
-        fileChanges: [],
-        summary: {
-          total_files: 0
+      return this.apiClient.handleApiError(
+        error,
+        `adding ${isInline ? 'inline ' : ''}comment to pull request ${pull_request_id} in ${workspace}/${repository}`
+      ) as ToolResponse;
+    }
+  }
+
+  // ── manage_comment (edit/delete/resolve/reopen/convert — comments & tasks) ─
+
+  async handleManageComment(args: any): Promise<ToolResponse> {
+    if (!isManageCommentArgs(args)) {
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for manage_comment');
+    }
+    const { workspace, repository, pull_request_id, comment_id, action, text } = args;
+    const isServer = this.apiClient.getIsServer();
+
+    try {
+      if (!isServer) {
+        const cloudBase = `${this.cloudPrPath(workspace, repository, pull_request_id)}/comments/${comment_id}`;
+        switch (action) {
+          case 'delete':
+            await this.apiClient.makeRequest('delete', cloudBase);
+            return textContent(`Comment #${comment_id} deleted.`);
+          case 'edit':
+            if (text === undefined) throw new McpError(ErrorCode.InvalidParams, 'edit requires text');
+            await this.apiClient.makeRequest('put', cloudBase, { content: { raw: text } });
+            return textContent(`Comment #${comment_id} updated.`);
+          case 'resolve':
+            await this.apiClient.makeRequest('post', `${cloudBase}/resolve`, {});
+            return textContent(`#${comment_id} resolved.`);
+          case 'reopen':
+            await this.apiClient.makeRequest('delete', `${cloudBase}/resolve`);
+            return textContent(`#${comment_id} reopened.`);
+          default:
+            return errorContent(`manage_comment action "${action}" is only supported on Bitbucket Server / Data Center (Cloud has no task severity).`);
+        }
+      }
+
+      const commentPath = `${this.serverPrPath(workspace, repository, pull_request_id)}/comments/${comment_id}`;
+      const callerSuppliedVersion = typeof args.version === 'number';
+      const getVersion = async (): Promise<number> =>
+        args.version ?? (await this.apiClient.makeRequest<any>('get', commentPath)).version;
+
+      let version = await getVersion();
+      const bodyFor = (): any => {
+        switch (action) {
+          case 'edit':
+            if (text === undefined) throw new McpError(ErrorCode.InvalidParams, 'edit requires text');
+            return { text, version };
+          case 'resolve':
+            return { state: 'RESOLVED', version };
+          case 'reopen':
+            return { state: 'OPEN', version };
+          case 'to_task':
+            return { severity: 'BLOCKER', version };
+          case 'to_comment':
+            return { severity: 'NORMAL', version };
+          default:
+            return undefined;
         }
       };
+
+      if (action === 'delete') {
+        await this.withVersionRetry(
+          () => this.apiClient.makeRequest('delete', commentPath, undefined, { params: { version } }),
+          async () => {
+            args.version = undefined;
+            version = await getVersion();
+          },
+          callerSuppliedVersion
+        );
+        return textContent(`Comment #${comment_id} deleted.`);
+      }
+
+      const result = await this.withVersionRetry(
+        () => this.apiClient.makeRequest<any>('put', commentPath, bodyFor()),
+        async () => {
+          args.version = undefined;
+          version = await getVersion();
+        },
+        callerSuppliedVersion
+      );
+      const messages: Record<string, string> = {
+        edit: `Comment #${comment_id} updated (version ${result.version}).`,
+        resolve: `#${comment_id} resolved.`,
+        reopen: `#${comment_id} reopened.`,
+        to_task: `Comment #${comment_id} converted to a task.`,
+        to_comment: `Task #${comment_id} converted to a comment.`,
+      };
+      return textContent(messages[action]);
+    } catch (error: any) {
+      if (error?.status === 409) {
+        return errorContent(
+          `Cannot ${action} comment #${comment_id}: ${error?.message?.includes('Concurrent modification') ? error.message : 'it has replies or was modified concurrently.'}`
+        );
+      }
+      return this.apiClient.handleApiError(error, `${action} on comment ${comment_id} in PR ${pull_request_id}`) as ToolResponse;
     }
   }
+
+  // ── list_pr_commits ────────────────────────────────────────────────────────
+
+  async handleListPrCommits(args: any): Promise<ToolResponse> {
+    if (!isListPrCommitsArgs(args)) {
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for list_pr_commits');
+    }
+    const { workspace, repository, pull_request_id, include_build_status = false } = args;
+    const limit = args.limit ?? this.cfg.pagination.defaultListLimit;
+    const start = args.start ?? 0;
+
+    try {
+      let commits: FormattedCommit[];
+      let hasMore: boolean;
+      let nextStart: number | undefined;
+
+      if (this.apiClient.getIsServer()) {
+        const response = await this.apiClient.makeRequest<any>(
+          'get',
+          `${this.serverPrPath(workspace, repository, pull_request_id)}/commits`,
+          undefined,
+          { params: { limit, start } }
+        );
+        commits = (response.values || []).map(formatServerCommit);
+        ({ hasMore, nextStart } = serverPage(response));
+      } else {
+        const response = await this.apiClient.makeRequest<any>(
+          'get',
+          `${this.cloudPrPath(workspace, repository, pull_request_id)}/commits`,
+          undefined,
+          { params: { pagelen: limit, page: Math.floor(start / limit) + 1 } }
+        );
+        commits = (response.values || []).map(formatCloudCommit);
+        hasMore = !!response.next;
+        nextStart = hasMore ? start + limit : undefined;
+      }
+
+      if (include_build_status && this.apiClient.getIsServer() && commits.length > 0) {
+        const summaries = await this.apiClient.getBuildSummaries(workspace, repository, commits.map(c => c.hash));
+        commits = commits.map(c => {
+          const b = summaries[c.hash];
+          return b
+            ? { ...c, build_status: { successful: b.successful || 0, failed: b.failed || 0, in_progress: b.inProgress || 0 } }
+            : c;
+        }) as FormattedCommit[];
+      }
+
+      return jsonContent(
+        compactObject({
+          pull_request_id,
+          commits: commits.map(compactCommit),
+          has_more: hasMore || undefined,
+          next_start: nextStart,
+        })
+      );
+    } catch (error) {
+      return this.apiClient.handleApiError(error, `listing commits for pull request ${pull_request_id} in ${workspace}/${repository}`) as ToolResponse;
+    }
+  }
+
+  // ── code_snippet → line resolution (single-FILE diff, server-side scoped) ──
 
   private async resolveLineFromCode(
     workspace: string,
@@ -912,93 +1014,52 @@ export class PullRequestHandlers {
     codeSnippet: string,
     searchContext?: { before?: string[]; after?: string[] },
     matchStrategy: 'strict' | 'best' = 'strict'
-  ): Promise<{ 
-    line_number: number; 
-    line_type: 'ADDED' | 'REMOVED' | 'CONTEXT'; 
-    sequential_position?: number;
-    hunk_info?: any;
-    diff_context?: string;
-    diff_content_preview?: string;
-    calculation_details?: string;
-  }> {
+  ): Promise<{ line_number: number; line_type: 'ADDED' | 'REMOVED' | 'CONTEXT' }> {
     try {
-      const diffContent = await this.getFilteredPullRequestDiff(workspace, repository, pullRequestId, filePath);
-      
+      // Fetch only THIS file's diff — the endpoints support a path scope.
+      let diffContent: string;
+      if (this.apiClient.getIsServer()) {
+        diffContent = await this.apiClient.makeRequest<string>(
+          'get',
+          `${this.serverPrPath(workspace, repository, pullRequestId)}/diff/${encodeRepoPath(filePath)}`,
+          undefined,
+          { params: { contextLines: 3 }, headers: { Accept: 'text/plain' }, responseType: 'text' }
+        );
+      } else {
+        diffContent = await this.apiClient.makeRequest<string>(
+          'get',
+          `${this.cloudPrPath(workspace, repository, pullRequestId)}/diff`,
+          undefined,
+          { params: { context: 3, path: filePath }, headers: { Accept: 'text/plain' }, responseType: 'text' }
+        );
+      }
+
       const parser = new DiffParser();
       const sections = parser.parseDiffIntoSections(diffContent);
-      
-      let fileSection = sections[0];
-      if (!this.apiClient.getIsServer()) {
-        fileSection = sections.find(s => s.filePath === filePath) || sections[0];
-      }
-
+      const fileSection = sections.find(s => s.filePath === filePath) ?? sections[0];
       if (!fileSection) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `File ${filePath} not found in pull request diff`
-        );
+        throw new McpError(ErrorCode.InvalidParams, `File ${filePath} not found in pull request diff`);
       }
 
-      const matches = this.findCodeMatches(
-        fileSection.content,
-        codeSnippet,
-        searchContext
-      );
-      
+      const matches = this.findCodeMatches(fileSection.content, codeSnippet, searchContext);
       if (matches.length === 0) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Code snippet not found in ${filePath}`
-        );
+        throw new McpError(ErrorCode.InvalidParams, `Code snippet not found in ${filePath}`);
+      }
+      if (matches.length === 1 || matchStrategy === 'best') {
+        const best = matches.sort((a, b) => b.confidence - a.confidence)[0];
+        return { line_number: best.line_number, line_type: best.line_type };
       }
 
-      if (matches.length === 1) {
-        return {
-          line_number: matches[0].line_number,
-          line_type: matches[0].line_type,
-          sequential_position: matches[0].sequential_position,
-          hunk_info: matches[0].hunk_info,
-          diff_context: matches[0].preview,
-          diff_content_preview: diffContent.split('\n').slice(0, 50).join('\n'),
-          calculation_details: `Direct line number from diff: ${matches[0].line_number}`
-        };
-      }
-
-      if (matchStrategy === 'best') {
-        const best = this.selectBestMatch(matches);
-        
-        return {
-          line_number: best.line_number,
-          line_type: best.line_type,
-          sequential_position: best.sequential_position,
-          hunk_info: best.hunk_info,
-          diff_context: best.preview,
-          diff_content_preview: diffContent.split('\n').slice(0, 50).join('\n'),
-          calculation_details: `Best match selected from ${matches.length} matches, line: ${best.line_number}`
-        };
-      }
-
-      const error: MultipleMatchesError = {
-        code: 'MULTIPLE_MATCHES_FOUND',
-        message: `Code snippet '${codeSnippet.substring(0, 50)}...' found in ${matches.length} locations`,
-        occurrences: matches.map(m => ({
-          line_number: m.line_number,
-          file_path: filePath,
-          preview: m.preview,
-          confidence: m.confidence,
-          line_type: m.line_type
-        })),
-        suggestion: 'To resolve, either:\n1. Add more context to uniquely identify the location\n2. Use match_strategy: \'best\' to auto-select highest confidence match\n3. Use line_number directly'
-      };
-
+      const listed = matches.slice(0, this.cfg.output.snippetMatchListMax);
       throw new McpError(
         ErrorCode.InvalidParams,
-        JSON.stringify({ error })
+        `Code snippet matches ${matches.length} locations in ${filePath}: ` +
+          listed.map(m => `line ${m.line_number} (${m.line_type})`).join(', ') +
+          (matches.length > listed.length ? ` …and ${matches.length - listed.length} more.` : '') +
+          ` Add search_context, use match_strategy:"best", or pass line_number directly.`
       );
     } catch (error) {
-      if (error instanceof McpError) {
-        throw error;
-      }
+      if (error instanceof McpError) throw error;
       throw new McpError(
         ErrorCode.InternalError,
         `Failed to resolve line from code: ${error instanceof Error ? error.message : String(error)}`
@@ -1013,51 +1074,42 @@ export class PullRequestHandlers {
   ): CodeMatch[] {
     const lines = diffContent.split('\n');
     const matches: CodeMatch[] = [];
-    let currentDestLine = 0; // Destination file line number
-    let currentSrcLine = 0;  // Source file line number
     let inHunk = false;
-    let sequentialAddedCount = 0; // Track sequential ADDED lines
-    let currentHunkIndex = -1;
     let currentHunkDestStart = 0;
     let currentHunkSrcStart = 0;
-    let destPositionInHunk = 0; // Track position in destination file relative to hunk start
-    let srcPositionInHunk = 0;  // Track position in source file relative to hunk start
+    let destPositionInHunk = 0;
+    let srcPositionInHunk = 0;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-
       if (line.startsWith('@@')) {
-        const match = line.match(/@@ -(\d+),\d+ \+(\d+),\d+ @@/);
+        // Counts are optional in git's short form (`@@ -1 +1 @@`).
+        const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
         if (match) {
           currentHunkSrcStart = parseInt(match[1]);
           currentHunkDestStart = parseInt(match[2]);
-          currentSrcLine = currentHunkSrcStart;
-          currentDestLine = currentHunkDestStart;
           inHunk = true;
-          currentHunkIndex++;
           destPositionInHunk = 0;
           srcPositionInHunk = 0;
           continue;
         }
       }
-
       if (!inHunk) continue;
-
       if (line === '') {
         inHunk = false;
         continue;
       }
+      // "\ No newline at end of file" is metadata, not the end of the hunk.
+      if (line.startsWith('\\')) continue;
 
       let lineType: 'ADDED' | 'REMOVED' | 'CONTEXT';
       let lineContent = '';
       let lineNumber = 0;
-
       if (line.startsWith('+')) {
         lineType = 'ADDED';
         lineContent = line.substring(1);
         lineNumber = currentHunkDestStart + destPositionInHunk;
         destPositionInHunk++;
-        sequentialAddedCount++;
       } else if (line.startsWith('-')) {
         lineType = 'REMOVED';
         lineContent = line.substring(1);
@@ -1075,39 +1127,16 @@ export class PullRequestHandlers {
       }
 
       if (lineContent.trim() === codeSnippet.trim()) {
-        const confidence = this.calculateConfidence(
-          lines,
-          i,
-          searchContext,
-          lineType
-        );
-
         matches.push({
           line_number: lineNumber,
           line_type: lineType,
           exact_content: codeSnippet,
-          preview: this.getPreview(lines, i),
-          confidence,
-          context: this.extractContext(lines, i),
-          sequential_position: lineType === 'ADDED' ? sequentialAddedCount : undefined,
-          hunk_info: {
-            hunk_index: currentHunkIndex,
-            destination_start: currentHunkDestStart,
-            line_in_hunk: destPositionInHunk
-          }
+          preview: '',
+          confidence: this.calculateConfidence(lines, i, searchContext, lineType),
+          context: { lines_before: [], lines_after: [] },
         });
       }
-
-      if (lineType === 'ADDED') {
-        currentDestLine++;
-      } else if (lineType === 'REMOVED') {
-        currentSrcLine++;
-      } else if (lineType === 'CONTEXT') {
-        currentSrcLine++;
-        currentDestLine++;
-      }
     }
-
     return matches;
   }
 
@@ -1117,611 +1146,26 @@ export class PullRequestHandlers {
     searchContext?: { before?: string[]; after?: string[] },
     lineType?: 'ADDED' | 'REMOVED' | 'CONTEXT'
   ): number {
-    let confidence = 0.5; // Base confidence
-
-    if (!searchContext) {
-      return confidence;
-    }
-
+    let confidence = 0.5;
+    if (!searchContext) return confidence;
     if (searchContext.before) {
-      let matchedBefore = 0;
+      let matched = 0;
       for (let j = 0; j < searchContext.before.length; j++) {
         const contextLine = searchContext.before[searchContext.before.length - 1 - j];
         const checkIndex = index - j - 1;
-        if (checkIndex >= 0) {
-          const checkLine = lines[checkIndex].substring(1);
-          if (checkLine.trim() === contextLine.trim()) {
-            matchedBefore++;
-          }
-        }
+        if (checkIndex >= 0 && lines[checkIndex].substring(1).trim() === contextLine.trim()) matched++;
       }
-      confidence += (matchedBefore / searchContext.before.length) * 0.3;
+      confidence += (matched / searchContext.before.length) * 0.3;
     }
-
     if (searchContext.after) {
-      let matchedAfter = 0;
+      let matched = 0;
       for (let j = 0; j < searchContext.after.length; j++) {
-        const contextLine = searchContext.after[j];
         const checkIndex = index + j + 1;
-        if (checkIndex < lines.length) {
-          const checkLine = lines[checkIndex].substring(1);
-          if (checkLine.trim() === contextLine.trim()) {
-            matchedAfter++;
-          }
-        }
+        if (checkIndex < lines.length && lines[checkIndex].substring(1).trim() === searchContext.after[j].trim()) matched++;
       }
-      confidence += (matchedAfter / searchContext.after.length) * 0.3;
+      confidence += (matched / searchContext.after.length) * 0.3;
     }
-
-    if (lineType === 'ADDED') {
-      confidence += 0.1;
-    }
-
+    if (lineType === 'ADDED') confidence += 0.1;
     return Math.min(confidence, 1.0);
-  }
-
-  private getPreview(lines: string[], index: number): string {
-    const start = Math.max(0, index - 1);
-    const end = Math.min(lines.length, index + 2);
-    const previewLines = [];
-
-    for (let i = start; i < end; i++) {
-      const prefix = i === index ? '> ' : '  ';
-      previewLines.push(prefix + lines[i]);
-    }
-
-    return previewLines.join('\n');
-  }
-
-  private extractContext(lines: string[], index: number): { lines_before: string[]; lines_after: string[] } {
-    const linesBefore: string[] = [];
-    const linesAfter: string[] = [];
-
-    for (let i = Math.max(0, index - 2); i < index; i++) {
-      if (lines[i].match(/^[+\- ]/)) {
-        linesBefore.push(lines[i].substring(1));
-      }
-    }
-
-    for (let i = index + 1; i < Math.min(lines.length, index + 3); i++) {
-      if (lines[i].match(/^[+\- ]/)) {
-        linesAfter.push(lines[i].substring(1));
-      }
-    }
-
-    return {
-      lines_before: linesBefore,
-      lines_after: linesAfter
-    };
-  }
-
-  private selectBestMatch(matches: CodeMatch[]): CodeMatch {
-    return matches.sort((a, b) => b.confidence - a.confidence)[0];
-  }
-
-  async handleDeclinePullRequest(args: any) {
-    if (!isDeclinePullRequestArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for decline_pull_request'
-      );
-    }
-
-    const { workspace, repository, pull_request_id, comment } = args;
-
-    try {
-      // First get the PR to obtain the current version
-      const prPath = this.apiClient.getIsServer()
-        ? `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}`
-        : `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}`;
-
-      const pr = await this.apiClient.makeRequest<any>('get', prPath);
-
-      if (this.apiClient.getIsServer()) {
-        const version = pr.version;
-        const declinePath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/decline`;
-
-        await this.apiClient.makeRequest('post', declinePath, undefined, {
-          params: { version }
-        });
-      } else {
-        // Bitbucket Cloud
-        const declinePath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/decline`;
-        await this.apiClient.makeRequest('post', declinePath);
-      }
-
-      // Optionally add a comment explaining the decline
-      if (comment) {
-        await this.handleAddComment({
-          workspace,
-          repository,
-          pull_request_id,
-          comment_text: comment
-        });
-      }
-
-      return {
-        content: [{
-          type: 'text',
-          text: `Pull request #${pull_request_id} has been declined.${comment ? ' Comment added.' : ''}`
-        }]
-      };
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            error: `Failed to decline pull request: ${errorMessage}`,
-            details: error.response?.data
-          }, null, 2)
-        }],
-        isError: true
-      };
-    }
-  }
-
-  async handleDeleteComment(args: any) {
-    if (!isDeleteCommentArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for delete_comment'
-      );
-    }
-
-    const { workspace, repository, pull_request_id, comment_id } = args;
-
-    try {
-      if (this.apiClient.getIsServer()) {
-        // First get the comment to obtain the current version
-        const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${comment_id}`;
-        const comment = await this.apiClient.makeRequest<any>('get', commentPath);
-        const version = comment.version;
-
-        await this.apiClient.makeRequest('delete', commentPath, undefined, {
-          params: { version }
-        });
-      } else {
-        // Bitbucket Cloud
-        const commentPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/comments/${comment_id}`;
-        await this.apiClient.makeRequest('delete', commentPath);
-      }
-
-      return {
-        content: [{
-          type: 'text',
-          text: `Comment #${comment_id} has been deleted from pull request #${pull_request_id}.`
-        }]
-      };
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
-
-      // Handle specific error for comments with replies
-      if (error.response?.status === 409) {
-        return {
-          content: [{
-            type: 'text',
-            text: 'Cannot delete this comment because it has replies. Delete the replies first.'
-          }],
-          isError: true
-        };
-      }
-
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            error: `Failed to delete comment: ${errorMessage}`,
-            details: error.response?.data
-          }, null, 2)
-        }],
-        isError: true
-      };
-    }
-  }
-
-  async handleListPrCommits(args: any) {
-    if (!isListPrCommitsArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for list_pr_commits'
-      );
-    }
-
-    const { workspace, repository, pull_request_id, limit = 25, start = 0, include_build_status = false } = args;
-
-    try {
-      // First get the PR details to include in response
-      const prPath = this.apiClient.getIsServer()
-        ? `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}`
-        : `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}`;
-      
-      let prTitle = '';
-      try {
-        const pr = await this.apiClient.makeRequest<any>('get', prPath);
-        prTitle = pr.title;
-      } catch (e) {
-        // Ignore error, PR title is optional
-      }
-
-      let apiPath: string;
-      let params: any = {};
-      let commits: FormattedCommit[] = [];
-      let totalCount = 0;
-      let nextPageStart: number | null = null;
-
-      if (this.apiClient.getIsServer()) {
-        // Bitbucket Server API
-        apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/commits`;
-        params = {
-          limit,
-          start,
-          withCounts: true
-        };
-
-        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
-
-        // Format commits
-        commits = (response.values || []).map((commit: BitbucketServerCommit) => formatServerCommit(commit));
-
-        totalCount = response.size || commits.length;
-        if (!response.isLastPage && response.nextPageStart !== undefined) {
-          nextPageStart = response.nextPageStart;
-        }
-      } else {
-        // Bitbucket Cloud API
-        apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/commits`;
-        params = {
-          pagelen: limit,
-          page: Math.floor(start / limit) + 1
-        };
-
-        const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
-
-        // Format commits
-        commits = (response.values || []).map((commit: BitbucketCloudCommit) => formatCloudCommit(commit));
-
-        totalCount = response.size || commits.length;
-        if (response.next) {
-          nextPageStart = start + limit;
-        }
-      }
-
-      // Fetch build status if requested (Server only)
-      if (include_build_status && this.apiClient.getIsServer() && commits.length > 0) {
-        try {
-          const commitIds = commits.map(c => c.hash);
-          const buildSummaries = await this.apiClient.getBuildSummaries(
-            workspace,
-            repository,
-            commitIds
-          );
-
-          // Enhance commits with build status
-          commits = commits.map(commit => {
-            const buildData = buildSummaries[commit.hash];
-            if (buildData) {
-              return {
-                ...commit,
-                build_status: {
-                  successful: buildData.successful || 0,
-                  failed: buildData.failed || 0,
-                  in_progress: buildData.inProgress || 0,
-                  unknown: buildData.unknown || 0
-                }
-              };
-            }
-            return commit;
-          });
-        } catch (error) {
-          console.error('Failed to fetch build status for PR commits:', error);
-          // Graceful degradation - continue without build status
-        }
-      }
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify({
-              pull_request_id,
-              pull_request_title: prTitle,
-              commits,
-              total_count: totalCount,
-              start,
-              limit,
-              has_more: nextPageStart !== null,
-              next_start: nextPageStart
-            }, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      return this.apiClient.handleApiError(error, `listing commits for pull request ${pull_request_id} in ${workspace}/${repository}`);
-    }
-  }
-
-  // PR Task handlers
-  async handleListPrTasks(args: any) {
-    if (!isListPrTasksArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for list_pr_tasks'
-      );
-    }
-
-    const { workspace, repository, pull_request_id } = args;
-
-    try {
-      if (!this.apiClient.getIsServer()) {
-        throw new Error('PR tasks are currently only supported for Bitbucket Server');
-      }
-
-      // Get all activities and filter for BLOCKER comments (tasks)
-      const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/activities`;
-      const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, {
-        params: { limit: 1000 }
-      });
-
-      const activities = response.values || [];
-
-      // Filter for comments with severity BLOCKER (these are tasks)
-      const tasks = activities
-        .filter((a: any) => a.action === 'COMMENTED' && a.comment?.severity === 'BLOCKER')
-        .map((a: any) => ({
-          id: a.comment.id,
-          text: a.comment.text,
-          author: a.comment.author?.displayName || a.comment.author?.name,
-          state: a.comment.state || 'OPEN',
-          created_on: new Date(a.comment.createdDate).toISOString(),
-          is_resolved: a.comment.state === 'RESOLVED'
-        }));
-
-      const openTasks = tasks.filter((t: any) => t.state === 'OPEN');
-      const resolvedTasks = tasks.filter((t: any) => t.state === 'RESOLVED');
-
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            pull_request_id,
-            tasks,
-            summary: {
-              total: tasks.length,
-              open: openTasks.length,
-              resolved: resolvedTasks.length
-            }
-          }, null, 2)
-        }]
-      };
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            error: `Failed to list PR tasks: ${errorMessage}`,
-            details: error.response?.data
-          }, null, 2)
-        }],
-        isError: true
-      };
-    }
-  }
-
-  async handleCreatePrTask(args: any) {
-    if (!isCreatePrTaskArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for create_pr_task'
-      );
-    }
-
-    const { workspace, repository, pull_request_id, text } = args;
-
-    try {
-      if (!this.apiClient.getIsServer()) {
-        throw new Error('PR tasks are currently only supported for Bitbucket Server');
-      }
-
-      const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments`;
-      const requestBody = {
-        text: text,
-        severity: 'BLOCKER'
-      };
-
-      const task = await this.apiClient.makeRequest<any>('post', apiPath, requestBody);
-
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            message: 'Task created successfully',
-            task: {
-              id: task.id,
-              text: task.text,
-              author: task.author?.displayName || task.author?.name,
-              state: task.state || 'OPEN',
-              created_on: new Date(task.createdDate).toISOString()
-            }
-          }, null, 2)
-        }]
-      };
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            error: `Failed to create PR task: ${errorMessage}`,
-            details: error.response?.data
-          }, null, 2)
-        }],
-        isError: true
-      };
-    }
-  }
-
-  async handleUpdatePrTask(args: any) {
-    if (!isUpdatePrTaskArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for update_pr_task'
-      );
-    }
-
-    const { workspace, repository, pull_request_id, task_id, text } = args;
-
-    try {
-      if (!this.apiClient.getIsServer()) {
-        throw new Error('PR tasks are currently only supported for Bitbucket Server');
-      }
-
-      // First get the current task to get version
-      const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${task_id}`;
-      const comment = await this.apiClient.makeRequest<any>('get', commentPath);
-
-      const requestBody = {
-        text: text,
-        version: comment.version
-      };
-
-      const updatedTask = await this.apiClient.makeRequest<any>('put', commentPath, requestBody);
-
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            message: 'Task updated successfully',
-            task: {
-              id: updatedTask.id,
-              text: updatedTask.text,
-              state: updatedTask.state || 'OPEN'
-            }
-          }, null, 2)
-        }]
-      };
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            error: `Failed to update PR task: ${errorMessage}`,
-            details: error.response?.data
-          }, null, 2)
-        }],
-        isError: true
-      };
-    }
-  }
-
-  async handleSetPrTaskStatus(args: any) {
-    if (!isSetPrTaskStatusArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for set_pr_task_status'
-      );
-    }
-
-    const { workspace, repository, pull_request_id, task_id, done } = args;
-
-    try {
-      if (!this.apiClient.getIsServer()) {
-        throw new Error('PR tasks are currently only supported for Bitbucket Server');
-      }
-
-      const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${task_id}`;
-      const comment = await this.apiClient.makeRequest<any>('get', commentPath);
-
-      await this.apiClient.makeRequest<any>('put', commentPath, {
-        state: done ? 'RESOLVED' : 'OPEN',
-        version: comment.version
-      });
-
-      return {
-        content: [{
-          type: 'text',
-          text: done ? `Task #${task_id} has been marked as done.` : `Task #${task_id} has been reopened.`
-        }]
-      };
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            error: `Failed to update task status: ${errorMessage}`,
-            details: error.response?.data
-          }, null, 2)
-        }],
-        isError: true
-      };
-    }
-  }
-
-  async handleDeletePrTask(args: any) {
-    if (!isTaskIdArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for delete_pr_task'
-      );
-    }
-
-    const { workspace, repository, pull_request_id, task_id } = args;
-
-    // Reuse existing delete comment handler
-    return this.handleDeleteComment({
-      workspace,
-      repository,
-      pull_request_id,
-      comment_id: task_id
-    });
-  }
-
-  async handleConvertPrItem(args: any) {
-    if (!isConvertPrItemArgs(args)) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        'Invalid arguments for convert_pr_item'
-      );
-    }
-
-    const { workspace, repository, pull_request_id, id, direction } = args;
-
-    try {
-      if (!this.apiClient.getIsServer()) {
-        throw new Error('PR tasks are currently only supported for Bitbucket Server');
-      }
-
-      const commentPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments/${id}`;
-      const item = await this.apiClient.makeRequest<any>('get', commentPath);
-
-      await this.apiClient.makeRequest<any>('put', commentPath, {
-        severity: direction === 'to_task' ? 'BLOCKER' : 'NORMAL',
-        version: item.version
-      });
-
-      return {
-        content: [{
-          type: 'text',
-          text: direction === 'to_task'
-            ? `Comment #${id} has been converted to a task.`
-            : `Task #${id} has been converted to a comment.`
-        }]
-      };
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.errors?.[0]?.message || error.message;
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify({
-            error: `Failed to convert item: ${errorMessage}`,
-            details: error.response?.data
-          }, null, 2)
-        }],
-        isError: true
-      };
-    }
   }
 }

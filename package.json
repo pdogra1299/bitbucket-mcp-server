@@ -1,6 +1,6 @@
 {
   "name": "@nexus2520/bitbucket-mcp-server",
-  "version": "2.3.1",
+  "version": "3.0.0",
   "description": "MCP server for Bitbucket API integration - supports both Cloud and Server",
   "type": "module",
   "main": "./build/index.js",
@@ -9,14 +9,16 @@
   },
   "files": [
     "build/**/*",
+    "!build/tests/**",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
   ],
   "scripts": {
-    "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
+    "build": "rm -rf build && tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
     "dev": "tsc --watch",
     "start": "node build/index.js",
+    "test": "npm run build && node --test build/tests/",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -46,11 +48,13 @@
     "@modelcontextprotocol/sdk": "^1.12.1",
     "axios": "^1.10.0",
     "form-data": "^4.0.4",
-    "minimatch": "9.0.5"
+    "minimatch": "9.0.5",
+    "tar-stream": "^3.2.0"
   },
   "devDependencies": {
     "@types/minimatch": "^5.1.2",
     "@types/node": "^22.15.29",
+    "@types/tar-stream": "^3.1.4",
     "typescript": "^5.8.3"
   }
 }
