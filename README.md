@@ -82,6 +82,26 @@ Measured on a live Data Center instance: a repeated content search went from **5
 }
 ```
 
+Or load credentials from a dotenv file with `--env-file` (existing process env still wins; pass the flag multiple times to layer files):
+
+```json
+{
+  "mcpServers": {
+    "bitbucket": {
+      "command": "npx",
+      "args": ["-y", "@nexus2520/bitbucket-mcp-server", "--env-file", "/path/to/bitbucket.env"]
+    }
+  }
+}
+```
+
+```bash
+# bitbucket.env
+BITBUCKET_USERNAME=your.username
+BITBUCKET_TOKEN=your-http-access-token
+BITBUCKET_BASE_URL=https://bitbucket.yourcompany.com
+```
+
 For Bitbucket Cloud use `BITBUCKET_APP_PASSWORD` instead of `BITBUCKET_TOKEN` (and omit `BITBUCKET_BASE_URL`).
 
 Credential walkthroughs: [Cloud app password](SETUP_GUIDE.md) · [Server/DC HTTP token](SETUP_GUIDE_SERVER.md).
