@@ -1,9 +1,18 @@
 #!/usr/bin/env node
+import { loadEnvFilesFromArgv } from './cli/env-file.js';
 import { loadConfig } from './config/index.js';
 import { BitbucketMcpServer } from './server.js';
 
-// Entry point: load config (all policy lives there), validate credentials,
-// start the server. Everything else is wired inside BitbucketMcpServer.
+// Entry point: optional `--env-file` -> load config (all policy lives there),
+// validate credentials, start the server. Everything else is wired inside
+// BitbucketMcpServer.
+
+try {
+  loadEnvFilesFromArgv();
+} catch (error) {
+  console.error(`Error: ${error instanceof Error ? error.message : error}`);
+  process.exit(1);
+}
 
 const config = loadConfig();
 

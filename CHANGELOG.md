@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`--env-file` CLI flag.** Load Bitbucket credentials and other config from a dotenv file via the [`dotenv`](https://www.npmjs.com/package/dotenv) package (e.g. `npx @nexus2520/bitbucket-mcp-server --env-file /path/to/.env`). Supports `--env-file path` and `--env-file=path`, multiple files (later overrides earlier for new keys), and never overrides variables already set in the process environment. Missing file or missing path exits with an error.
+
 ## [3.0.0] - 2026-07-09
 
 Complete revamp: grep-like repo search, drastically fewer Bitbucket API calls, rate-limit-safe transport, compact token-efficient responses, and a consolidated 25-tool surface. Design and verified API research in `REVAMP_PLAN.md`.
