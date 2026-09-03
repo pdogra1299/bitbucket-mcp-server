@@ -35,6 +35,12 @@ function repoScoped(a: any): boolean {
 
 // ── Pull requests ────────────────────────────────────────────────────────────
 
+export function isGetPullRequestTemplateArgs(a: any): a is { workspace: string; repository: string } {
+  return repoScoped(a) && [a.workspace, a.repository].every(
+    value => value.trim().length > 0 && value !== '.' && value !== '..'
+  );
+}
+
 export function isGetPullRequestArgs(a: any): a is {
   workspace: string; repository: string; pull_request_id: number;
   include_comments?: boolean; include_file_changes?: boolean; include_tasks?: boolean;

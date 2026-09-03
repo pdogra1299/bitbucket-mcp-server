@@ -42,6 +42,7 @@ export class BitbucketMcpServer {
 
     this.registry = new ToolRegistry(this.apiClient.getIsServer(), config.toolGroups);
     const handlers: Record<string, (args: any) => Promise<any>> = {
+      get_pull_request_template: a => pullRequests.handleGetPullRequestTemplate(a),
       get_pull_request: a => pullRequests.handleGetPullRequest(a),
       list_pull_requests: a => pullRequests.handleListPullRequests(a),
       create_pull_request: a => pullRequests.handleCreatePullRequest(a),

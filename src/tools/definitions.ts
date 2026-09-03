@@ -1,6 +1,6 @@
 import type { ToolDefinition } from '../types/index.js';
 
-// v3 tool surface: 25 tools (was 33). Descriptions are deliberately terse —
+// v3 tool surface: 26 tools (was 33). Descriptions are deliberately terse —
 // every definition is context the LLM pays for on each turn.
 
 const W = { type: 'string', description: 'Project key (e.g., PROJ)' };
@@ -37,6 +37,19 @@ const ATTACHMENTS = {
 
 export const toolDefinitions: ToolDefinition[] = [
   // ── PR core ────────────────────────────────────────────────────────────────
+  {
+    name: 'get_pull_request_template',
+    description:
+      'Read the current PR description template from repository settings (Server/DC internal UI API). ' +
+      'Returns enabled/scope metadata and unmodified Markdown. When enabled, fill it and pass it to create_pull_request.description.',
+    group: 'pr_core',
+    availability: 'server_only',
+    inputSchema: {
+      type: 'object',
+      properties: { workspace: W, repository: R },
+      required: ['workspace', 'repository'],
+    },
+  },
   {
     name: 'get_pull_request',
     description:
