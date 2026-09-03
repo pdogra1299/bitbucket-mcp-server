@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `get_pull_request_template` (Server/DC, `pr_core`) reads the current repository description template through the internal UI API, returning enabled/scope metadata and unmodified Markdown before PR creation.
+
 ## [3.0.0] - 2026-07-09
 
 Complete revamp: grep-like repo search, drastically fewer Bitbucket API calls, rate-limit-safe transport, compact token-efficient responses, and a consolidated 25-tool surface. Design and verified API research in `REVAMP_PLAN.md`.

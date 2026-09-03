@@ -32,6 +32,7 @@ import type {
   ToolResponse,
 } from '../types/index.js';
 import {
+  isGetPullRequestTemplateArgs,
   isGetPullRequestArgs,
   isListPullRequestsArgs,
   isCreatePullRequestArgs,
@@ -73,6 +74,40 @@ export class PullRequestHandlers {
 
   private cloudPrPath(workspace: string, repository: string, id?: number): string {
     return `/repositories/${workspace}/${repository}/pullrequests${id !== undefined ? `/${id}` : ''}`;
+  }
+
+  // ── get_pull_request_template ─────────────────────────────────────────────
+
+  async handleGetPullRequestTemplate(args: any): Promise<ToolResponse> {
+    if (!isGetPullRequestTemplateArgs(args)) {
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for get_pull_request_template');
+    }
+    if (!this.apiClient.getIsServer()) {
+      return errorContent('Pull request description templates are only supported on Bitbucket Server / Data Center.');
+    }
+    const { workspace, repository } = args;
+    const path = `/rest/ui/latest/projects/${encodeURIComponent(workspace)}/repos/${encodeURIComponent(repository)}/pull-request-templates`;
+    try {
+      const response = await this.apiClient.makeRequest<any>('get', path);
+      // A login page or a changed internal API must not look like an empty template.
+      if (!response || typeof response.enabled !== 'boolean' ||
+          (typeof response.description !== 'string' && (response.enabled || response.description != null))) {
+        return errorContent(
+          'Unexpected pull request template response from the internal Bitbucket UI API. ' +
+          'Read the template from the Create pull request form instead.'
+        );
+      }
+      const result = jsonContent(compactObject({ enabled: response.enabled, scope: response.scope }));
+      // Keep Markdown separate from metadata, without trimming/escaping it. Empty is valid.
+      if (typeof response.description === 'string') {
+        result.content.push(...textContent(response.description).content);
+      }
+      return result;
+    } catch (error) {
+      return this.apiClient.handleApiError(
+        error, `getting pull request template for ${workspace}/${repository} (internal Server/DC UI API)`
+      );
+    }
   }
 
   // ── Attachments (upload + embed) ───────────────────────────────────────────

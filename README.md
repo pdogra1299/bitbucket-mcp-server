@@ -17,11 +17,11 @@ Supports **Bitbucket Server / Data Center** (primary target) and Bitbucket Cloud
 | Read a 100-line window | 2 calls, full file transferred | **1 call, window only** |
 | Blame a window of a huge file | up to 100 calls | **1 call** |
 | Rate-limit safety | none (burst → 429/403) | client-side pacing sized to DC's limiter |
-| Tools | 33 | **25** (~30% less definition context) |
+| Tools | 33 | **26** |
 
 Measured on a live Data Center instance: a repeated content search went from **519 API calls / ~7s** (finding 1 of 8 real matches under burst throttling) to **0 API calls / 24ms** finding all 8. Full design and verified API research: [`REVAMP_PLAN.md`](REVAMP_PLAN.md).
 
-## Tools (25)
+## Tools (26)
 
 ### Search (`search`) — Server/DC only
 - **`grep`** — search file contents with **full regex, any branch**, like ripgrep on a local clone. One `archive` download per repo+commit, streamed in constant memory, cached in-process, freshness-checked every call (responses carry `as_of <commit>`). Omit `query` for filename-only glob listing. Modes: `content`, `files`, `count`; `glob`, `path`, `context`, `case_insensitive`, `max_results`.
@@ -29,6 +29,7 @@ Measured on a live Data Center instance: a repeated content search went from **5
 - **`search_repositories`** — find repos by name/description.
 
 ### Pull requests (`pr_core`)
+- **`get_pull_request_template`** — read the current repository PR description template (Server/DC only). Returns compact `enabled`/`scope` metadata followed by the original Markdown as a separate text block, when present. Fill the template and pass it to `create_pull_request.description`.
 - **`get_pull_request`** — metadata + reviewer status + merge info in **1 call**; `include_comments` / `include_file_changes` (default true), `include_tasks`, `comment_limit`. Returns `version` for follow-up mutations.
 - **`list_pull_requests`** — repo-scoped; omit `repository` (Server) for **your PRs across all repos** in one call (`role` filter).
 - **`create_pull_request`**, **`update_pull_request`**, **`merge_pull_request`**, **`decline_pull_request`** — all mutations accept `version` from a prior read (saves a fetch; auto-refetch + retry once on 409 conflicts).
@@ -54,6 +55,14 @@ Measured on a live Data Center instance: a repeated content search went from **5
 
 ### Attachments (`attachments`, Server) / Discovery (`discovery`)
 - **`manage_attachments`** (`download` capped, `delete`), **`list_projects`**, **`list_repositories`**.
+
+### Reading a PR description template
+
+Call `get_pull_request_template` with `{"workspace":"PROJ","repository":"my-repo"}` before preparing a PR description. The first content block contains compact JSON with `enabled` and the server-provided `scope`; a second text block contains the exact Markdown when `description` is present, including an intentionally empty string.
+
+An `enabled: false` response means the custom template is disabled; do not apply any stored description as an active template. The tool reads settings only and does not create a PR, fill placeholders, or implement project inheritance itself. `create_pull_request` still takes the completed description explicitly.
+
+This uses the **internal** Server/DC endpoint `GET /rest/ui/latest/projects/{projectKey}/repos/{repositorySlug}/pull-request-templates`. Availability and permissions depend on the Bitbucket version/configuration; errors are surfaced rather than replaced with an invented template. If unavailable, read the description from the Create pull request form. The tool is not exposed on Bitbucket Cloud.
 
 ## Output conventions
 
