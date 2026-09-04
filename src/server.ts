@@ -53,6 +53,7 @@ export class BitbucketMcpServer {
       list_pr_commits: a => pullRequests.handleListPrCommits(a),
       get_pull_request_diff: a => reviews.handleGetPullRequestDiff(a),
       set_review_status: a => reviews.handleSetReviewStatus(a),
+      manage_reviewer: a => reviews.handleManageReviewer(a),
       list_branch_commits: a => branches.handleListBranchCommits(a),
       get_commit_detail: a => branches.handleGetCommitDetail(a),
       list_branches: a => branches.handleListBranches(a),

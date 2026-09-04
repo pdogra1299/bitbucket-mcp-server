@@ -7,6 +7,19 @@ MCP server for Bitbucket — built for AI coding agents that need to work with r
 
 Supports **Bitbucket Server / Data Center** (primary target) and Bitbucket Cloud.
 
+
+> **Fork note.** Forked from [pdogra1299/bitbucket-mcp-server](https://github.com/pdogra1299/bitbucket-mcp-server)
+> at v3.0.0 (`6b05ecf`). Local changes:
+>
+> 1. **`manage_reviewer`** (new) — add/remove a PR participant via
+>    `POST|DELETE /rest/api/1.0/.../pull-requests/{id}/participants`. Upstream has no tool for this, so
+>    self-assignment on someone else's PR was impossible.
+> 2. **User identifiers are resolved, not guessed.** `set_review_status` derived the participant slug with
+>    `username.replace(/[@+]/g, '_')`; an e-mail in `BITBUCKET_USERNAME` therefore addressed a nonexistent
+>    user and Bitbucket answered `403 You may only update your own status.`, which this server reported as
+>    "Permission denied … check your credentials" — pointing at the wrong cause. Both tools now resolve via
+>    `GET /users/{id}` and fall back to `GET /users?filter=` (which does match an e-mail).
+
 ## Why v3
 
 | | v2 | v3 |
@@ -40,6 +53,7 @@ Measured on a live Data Center instance: a repeated content search went from **5
 ### Review (`pr_review`)
 - **`get_pull_request_diff`** — raw unified diff text; scope with `file_path` (server-side), `include_patterns`/`exclude_patterns`, `context_lines`, `ignore_whitespace`.
 - **`set_review_status`** — `APPROVED` / `NEEDS_WORK` / `UNAPPROVED` (mutually exclusive; one call).
+- **`manage_reviewer`** — `add` / `remove` a reviewer (Server/DC). **The only way to assign yourself to a PR you did not author**: Bitbucket limits the `reviewers` list on `update_pull_request` to the PR author or a repo admin and rejects everyone else with `Errors encountered while adding some reviewers`. Accepts a username, user slug **or e-mail**; defaults to `BITBUCKET_USERNAME`.
 
 ### Commits (`commits`)
 - **`list_pr_commits`**, **`list_branch_commits`** (server-side `since`-rev/`merges` filters; bounded page-walk for client-side `author`/`until`/`search`), **`get_commit_detail`** (unified diff, or `detail: "files"` for the changed-file list without bodies).

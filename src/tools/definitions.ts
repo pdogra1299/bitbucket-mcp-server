@@ -262,6 +262,35 @@ export const toolDefinitions: ToolDefinition[] = [
     },
   },
 
+  {
+    name: 'manage_reviewer',
+    description:
+      'Add or remove a PR reviewer (Server/DC). Use this to assign YOURSELF — update_pull_request cannot: ' +
+      'Bitbucket limits its `reviewers` list to the PR author or a repo admin. ' +
+      'Accepts a username, user slug or e-mail; defaults to BITBUCKET_USERNAME.',
+    group: 'pr_review',
+    availability: 'server_only',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        workspace: W,
+        repository: R,
+        pull_request_id: PRID,
+        action: { type: 'string', enum: ['add', 'remove'] },
+        username: {
+          type: 'string',
+          description: 'Username, user slug or e-mail. Default: BITBUCKET_USERNAME (yourself)',
+        },
+        role: {
+          type: 'string',
+          enum: ['REVIEWER', 'PARTICIPANT'],
+          description: 'For action=add; default REVIEWER',
+        },
+      },
+      required: ['workspace', 'repository', 'pull_request_id', 'action'],
+    },
+  },
+
   // ── Commits ────────────────────────────────────────────────────────────────
   {
     name: 'list_pr_commits',
