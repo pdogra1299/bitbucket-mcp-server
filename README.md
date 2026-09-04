@@ -19,6 +19,15 @@ Supports **Bitbucket Server / Data Center** (primary target) and Bitbucket Cloud
 >    user and Bitbucket answered `403 You may only update your own status.`, which this server reported as
 >    "Permission denied … check your credentials" — pointing at the wrong cause. Both tools now resolve via
 >    `GET /users/{id}` and fall back to `GET /users?filter=` (which does match an e-mail).
+>
+> **Running this fork.** `build/` is gitignored, so after a clone or clean:
+> `npm install && npx tsc`. Do **not** use `npm run build` on Windows — that script begins with
+> `rm -rf build`, which cmd.exe cannot run. `npm test` fails on Windows for the same class of reason
+> (`node --test build/tests/` resolves the directory as a module); run
+> `node --test build/tests/core.test.js build/tests/snapshot.test.js` instead.
+> Wire it into Claude Code with
+> `"command": "node", "args": ["<abs path>/build/index.js"]` — no `cmd /c` wrapper needed when node is
+> invoked directly.
 
 ## Why v3
 
