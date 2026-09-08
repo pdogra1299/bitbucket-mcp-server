@@ -1,6 +1,6 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { existsSync } from 'fs';
-import { BitbucketApiClient, encodeRepoPath } from '../core/api-client.js';
+import { BitbucketApiClient, CLOUD_MAX_PAGELEN_PR_LIST, encodeRepoPath } from '../core/api-client.js';
 import {
   formatServerPullRequest,
   formatCloudPullRequest,
@@ -437,7 +437,10 @@ export class PullRequestHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for list_pull_requests');
     }
     const { workspace, repository, state = 'OPEN', author, role } = args;
-    const limit = args.limit ?? this.cfg.pagination.defaultListLimit;
+    const limit = this.apiClient.clampPageSize(
+      args.limit ?? this.cfg.pagination.defaultListLimit,
+      CLOUD_MAX_PAGELEN_PR_LIST
+    );
     const start = args.start ?? 0;
 
     try {
@@ -751,8 +754,11 @@ export class PullRequestHandlers {
           typeof args.version === 'number'
         );
       } else {
-        // Cloud decline takes no version — no read needed.
-        await this.apiClient.makeRequest('post', `${this.cloudPrPath(workspace, repository, pull_request_id)}/decline`);
+        // Cloud decline takes no version, so no read is needed. It does, however,
+        // insist on a body: a POST with none answers 400. An empty object is
+        // enough, and is what makes axios send a Content-Type/Content-Length
+        // at all.
+        await this.apiClient.makeRequest('post', `${this.cloudPrPath(workspace, repository, pull_request_id)}/decline`, {});
       }
 
       let commentNote = '';
@@ -788,6 +794,16 @@ export class PullRequestHandlers {
       code_snippet, search_context, match_strategy = 'strict', severity, attachments,
     } = args;
 
+    // code_snippet can only be resolved within a known file's diff. Without
+    // file_path the block is skipped, the comment is created with no anchor, and
+    // the call reports success: you asked to annotate a line and got a
+    // PR-level comment instead.
+    if (code_snippet && !line_number && !file_path) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'code_snippet needs file_path to resolve against that file\'s diff. Pass file_path, or pass line_number directly.'
+      );
+    }
     if (code_snippet && !line_number && file_path) {
       const resolved = await this.resolveLineFromCode(
         workspace, repository, pull_request_id, file_path, code_snippet, search_context, match_strategy
@@ -952,7 +968,7 @@ export class PullRequestHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for list_pr_commits');
     }
     const { workspace, repository, pull_request_id, include_build_status = false } = args;
-    const limit = args.limit ?? this.cfg.pagination.defaultListLimit;
+    const limit = this.apiClient.clampPageSize(args.limit ?? this.cfg.pagination.defaultListLimit);
     const start = args.start ?? 0;
 
     try {
@@ -970,14 +986,29 @@ export class PullRequestHandlers {
         commits = (response.values || []).map(formatServerCommit);
         ({ hasMore, nextStart } = serverPage(response));
       } else {
-        const response = await this.apiClient.makeRequest<any>(
-          'get',
-          `${this.cloudPrPath(workspace, repository, pull_request_id)}/commits`,
-          undefined,
-          { params: { pagelen: limit, page: Math.floor(start / limit) + 1 } }
-        );
-        commits = (response.values || []).map(formatCloudCommit);
-        hasMore = !!response.next;
+        // Cloud rejects `page` outright on this endpoint. `?pagelen=25&page=1`
+        // answers 400 "Invalid page" while `?pagelen=25` answers 200, so it
+        // has to be walked by following `next` and slicing the window out.
+        // start=0, the only offset a first call ever uses, costs one request.
+        let url: string | null = `${this.cloudPrPath(workspace, repository, pull_request_id)}/commits`;
+        let reqParams: any | undefined = { pagelen: limit };
+        const collected: any[] = [];
+        for (let page = 0; page < this.cfg.pagination.commitsFilterMaxPages && url; page++) {
+          const response: any = await this.apiClient.makeRequest<any>(
+            'get',
+            url,
+            undefined,
+            reqParams ? { params: reqParams } : undefined
+          );
+          collected.push(...(response.values || []));
+          url = response.next || null; // absolute URL; axios overrides baseURL
+          reqParams = undefined;
+          if (collected.length >= start + limit) break;
+        }
+        commits = collected.slice(start, start + limit).map(formatCloudCommit);
+        // More exists if we over-fetched past the window, or pages remain
+        // (including the page-cap case, where url is still set).
+        hasMore = collected.length > start + limit || url !== null;
         nextStart = hasMore ? start + limit : undefined;
       }
 
@@ -1045,17 +1076,30 @@ export class PullRequestHandlers {
       if (matches.length === 0) {
         throw new McpError(ErrorCode.InvalidParams, `Code snippet not found in ${filePath}`);
       }
-      if (matches.length === 1 || matchStrategy === 'best') {
-        const best = matches.sort((a, b) => b.confidence - a.confidence)[0];
+
+      // search_context is what the ambiguity error below tells callers to add,
+      // so it has to actually narrow the field. It only ever fed the confidence
+      // score while the ambiguity check counted raw matches, which meant taking
+      // the error's advice changed nothing. Keep the best-scoring candidates and
+      // accept a unique winner; anything still tied stays ambiguous.
+      let candidates = matches;
+      if (searchContext && candidates.length > 1) {
+        const top = Math.max(...candidates.map(m => m.confidence));
+        const leaders = candidates.filter(m => Math.abs(m.confidence - top) < 1e-9);
+        if (leaders.length === 1) candidates = leaders;
+      }
+
+      if (candidates.length === 1 || matchStrategy === 'best') {
+        const best = candidates.sort((a, b) => b.confidence - a.confidence)[0];
         return { line_number: best.line_number, line_type: best.line_type };
       }
 
-      const listed = matches.slice(0, this.cfg.output.snippetMatchListMax);
+      const listed = candidates.slice(0, this.cfg.output.snippetMatchListMax);
       throw new McpError(
         ErrorCode.InvalidParams,
-        `Code snippet matches ${matches.length} locations in ${filePath}: ` +
+        `Code snippet matches ${candidates.length} locations in ${filePath}: ` +
           listed.map(m => `line ${m.line_number} (${m.line_type})`).join(', ') +
-          (matches.length > listed.length ? ` …and ${matches.length - listed.length} more.` : '') +
+          (candidates.length > listed.length ? ` …and ${candidates.length - listed.length} more.` : '') +
           ` Add search_context, use match_strategy:"best", or pass line_number directly.`
       );
     } catch (error) {

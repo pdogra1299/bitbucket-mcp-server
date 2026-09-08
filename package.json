@@ -18,7 +18,7 @@
     "build": "rm -rf build && tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
     "dev": "tsc --watch",
     "start": "node build/index.js",
-    "test": "npm run build && node --test build/tests/",
+    "test": "npm run build && node --test build/tests/*.js",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -46,7 +46,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "axios": "^1.10.0",
+    "axios": "^1.19.0",
     "form-data": "^4.0.4",
     "minimatch": "9.0.5",
     "tar-stream": "^3.2.0"

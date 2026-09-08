@@ -113,9 +113,10 @@ export class ReviewHandlers {
       } else {
         const base = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}`;
         if (status === 'APPROVED') {
-          await this.apiClient.makeRequest<any>('post', `${base}/approve`);
+          // Cloud 400s a bodyless POST here, same as /decline. Send {}.
+          await this.apiClient.makeRequest<any>('post', `${base}/approve`, {});
         } else if (status === 'NEEDS_WORK') {
-          await this.apiClient.makeRequest<any>('post', `${base}/request-changes`);
+          await this.apiClient.makeRequest<any>('post', `${base}/request-changes`, {});
         } else {
           // UNAPPROVED: clear both possible prior states. Only a 404
           // ("nothing to clear") is expected — anything else is a real error.

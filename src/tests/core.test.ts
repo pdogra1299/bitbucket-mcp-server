@@ -7,6 +7,7 @@ import { buildQueryFromClauses, quoteIfNeeded } from '../core/query-budget.js';
 import { LineScanner } from '../core/snapshot.js';
 import { truncateMarked, compactObject, isoDate, isCommitRev, toEpochMillis, serverPage } from '../formatting/respond.js';
 import { isPosInt, optNonNegInt } from '../tools/guards.js';
+import { cloudNameFilter, CLOUD_MAX_PAGELEN, CLOUD_MAX_PAGELEN_PR_LIST } from '../core/api-client.js';
 
 // ── throttle ─────────────────────────────────────────────────────────────────
 
@@ -227,4 +228,23 @@ test('truncateMarked marks, compactObject drops empties, isoDate normalizes', ()
   assert.deepEqual(compactObject({ a: 1, b: undefined, c: null, d: '' }), { a: 1 });
   assert.equal(isoDate(0), '1970-01-01T00:00:00.000Z');
   assert.equal(isoDate('not-a-date'), undefined);
+});
+
+// ── Cloud query and paging limits ────────────────────────────────────────────
+
+test('cloudNameFilter: builds a q clause and escapes the value', () => {
+  assert.equal(cloudNameFilter('widget'), 'name ~ "widget"');
+  // A quote would otherwise close the expression early and malform the query.
+  assert.equal(cloudNameFilter('say "hi"'), 'name ~ "say \\"hi\\""');
+  // Backslashes escape first, so the quote escape cannot be neutralised.
+  assert.equal(cloudNameFilter('back\\slash'), 'name ~ "back\\\\slash"');
+  assert.equal(cloudNameFilter(''), 'name ~ ""');
+});
+
+test('cloud pagelen ceilings: the PR list is lower than the rest', () => {
+  // Measured against api.bitbucket.org: /src, /commits and /refs/branches
+  // accept 100 and reject 101, while /pullrequests accepts 50 and rejects 51.
+  assert.equal(CLOUD_MAX_PAGELEN, 100);
+  assert.equal(CLOUD_MAX_PAGELEN_PR_LIST, 50);
+  assert.ok(CLOUD_MAX_PAGELEN_PR_LIST < CLOUD_MAX_PAGELEN);
 });

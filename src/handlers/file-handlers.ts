@@ -55,9 +55,13 @@ export class FileHandlers {
           start = typeof children.nextPageStart === 'number' ? children.nextPageStart : start + (children.values?.length ?? 0);
         }
       } else {
-        const branchOrDefault = branch || 'HEAD';
-        let url: string | null = `/repositories/${workspace}/${repository}/src/${branchOrDefault}${dirPath ? `/${dirPath}` : ''}`;
-        let params: any | undefined = { pagelen: pagination.dirPageLimit };
+        const ref = await this.cloudSrcRef(workspace, repository, branch);
+        // The trailing slash is load-bearing for the ROOT listing: `/src/{ref}`
+        // is a 404 on Cloud, `/src/{ref}/` is the directory. dirPath being ''
+        // leaves exactly that slash behind.
+        let url: string | null = `/repositories/${workspace}/${repository}/src/${ref}/${dirPath}`;
+        // dirPageLimit defaults to a Server-sized 1000; Cloud 400s above 100.
+        let params: any | undefined = { pagelen: this.apiClient.clampPageSize(pagination.dirPageLimit) };
         for (let page = 0; page < pagination.browseMaxPages && url; page++) {
           const response: any = await this.apiClient.makeRequest<any>('get', url, undefined, params ? { params } : undefined);
           entries.push(
@@ -140,6 +144,24 @@ export class FileHandlers {
     }
   }
 
+  /**
+   * Ref to use in a Cloud `/src/{ref}/{path}` read.
+   *
+   * Cloud resolves that URL by splitting on slashes, so a ref that contains one
+   * such as `feature/x` or `release/1.2`, swallows the path behind it. Requesting
+   * `/src/feature/x/a.py` resolves the ref `feature` and 404s, and encoding the
+   * slash does not help (`%2F` 404s identically). A commit SHA is the only ref
+   * form Cloud parses unambiguously, so slashed refs get resolved to one;
+   * resolveRef memoizes per (repo, ref) and passes 40-hex SHAs straight
+   * through. Slash-free refs and the default branch are left alone so the
+   * ordinary read stays a single request.
+   */
+  private async cloudSrcRef(workspace: string, repository: string, branch?: string): Promise<string> {
+    if (!branch) return 'HEAD';
+    if (!branch.includes('/')) return branch;
+    return await this.apiClient.resolveRef(workspace, repository, branch);
+  }
+
   private async rawContent(args: any): Promise<ToolResponse> {
     const { workspace, repository, file_path, branch, start_line, line_count } = args;
     let raw: string;
@@ -153,10 +175,10 @@ export class FileHandlers {
         { params, responseType: 'text', headers: { Accept: 'text/plain' } }
       );
     } else {
-      const branchOrDefault = branch || 'HEAD';
+      const ref = await this.cloudSrcRef(workspace, repository, branch);
       raw = await this.apiClient.makeRequest<string>(
         'get',
-        `/repositories/${workspace}/${repository}/src/${branchOrDefault}/${file_path}`,
+        `/repositories/${workspace}/${repository}/src/${ref}/${file_path}`,
         undefined,
         { responseType: 'text', headers: { Accept: 'text/plain' } }
       );

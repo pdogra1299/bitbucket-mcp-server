@@ -222,9 +222,10 @@ export function isGetFileBlameArgs(a: any): a is {
 // ── Discovery ────────────────────────────────────────────────────────────────
 
 export function isListProjectsArgs(a: any): a is {
-  name?: string; permission?: string; limit?: number; start?: number;
+  workspace?: string; name?: string; permission?: string; limit?: number; start?: number;
 } {
-  return isObj(a) && optStr(a.name) && optStr(a.permission) && optPosInt(a.limit) && optNonNegInt(a.start);
+  return isObj(a) && optStr(a.workspace) && optStr(a.name) && optStr(a.permission) &&
+    optPosInt(a.limit) && optNonNegInt(a.start);
 }
 
 export function isListRepositoriesArgs(a: any): a is {
