@@ -1,0 +1,63 @@
+name: Commit Policy
+
+# Every PR must be exactly one conventional commit with no merge commits, and
+# main only accepts squash merges. So the one message validated here is the
+# exact message semantic-release reads on main to decide the next version.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commit-policy-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  single-commit:
+    name: Single conventional commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }} # the PR commit itself, not the merge preview
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      # SHAs only — branch names and commit messages are contributor-controlled,
+      # so nothing from them is ever interpolated into the shell.
+      - name: Validate commit policy
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          COUNT=$(git rev-list --count "$HEAD_SHA" "^$BASE_SHA")
+          echo "Commits in this PR: $COUNT"
+          git log --oneline "$HEAD_SHA" "^$BASE_SHA"
+
+          if [ -n "$(git rev-list --merges "$HEAD_SHA" "^$BASE_SHA")" ]; then
+            echo "::error::Merge commits are not allowed. Rebase onto main instead: git rebase origin/main && git push --force-with-lease"
+            exit 1
+          fi
+
+          if [ "$COUNT" -ne 1 ]; then
+            echo "::error::This PR has $COUNT commits; exactly 1 is required. Squash them:"
+            echo "  git reset --soft \$(git merge-base HEAD origin/main)"
+            echo "  git commit -m 'type(scope): description'"
+            echo "  git push --force-with-lease"
+            exit 1
+          fi
+
+          # Use main's copy of the validator so a PR can't loosen the rules it is
+          # judged by (falls back to the PR's copy only until main has one).
+          git show "$BASE_SHA:scripts/validate-commit-msg.js" > "$RUNNER_TEMP/validate-commit-msg.mjs" 2>/dev/null \
+            || cp scripts/validate-commit-msg.js "$RUNNER_TEMP/validate-commit-msg.mjs"
+          git log -1 --format=%B "$HEAD_SHA" > "$RUNNER_TEMP/commit-msg"
+          node "$RUNNER_TEMP/validate-commit-msg.mjs" --strict "$RUNNER_TEMP/commit-msg"

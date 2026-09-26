@@ -18,8 +18,9 @@
     "build": "rm -rf build && tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
     "dev": "tsc --watch",
     "start": "node build/index.js",
-    "test": "npm run build && node --test build/tests/",
-    "prepublishOnly": "npm run build"
+    "test": "npm run build && node --test build/tests/*.test.js",
+    "prepublishOnly": "npm run build",
+    "prepare": "husky"
   },
   "keywords": [
     "mcp",
@@ -42,7 +43,10 @@
   },
   "homepage": "https://github.com/pdogra1299/bitbucket-mcp-server#readme",
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
@@ -52,9 +56,14 @@
     "tar-stream": "^3.2.0"
   },
   "devDependencies": {
+    "@semantic-release/changelog": "^7.0.0",
+    "@semantic-release/git": "^11.0.1",
     "@types/minimatch": "^5.1.2",
     "@types/node": "^22.15.29",
     "@types/tar-stream": "^3.1.4",
+    "conventional-changelog-conventionalcommits": "^10.4.0",
+    "husky": "^9.1.7",
+    "semantic-release": "^25.0.9",
     "typescript": "^5.8.3"
   }
 }

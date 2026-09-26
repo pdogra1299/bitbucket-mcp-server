@@ -1,0 +1,2 @@
+# Same validator CI runs (scripts/validate-commit-msg.js); see .github/workflows/commit-policy.yml.
+node scripts/validate-commit-msg.js "$1"
