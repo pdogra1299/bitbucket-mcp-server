@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [18, 20, 22]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Strict tsc type-check + emit.
+      - name: Build
+        run: npm run build
+
+      # Runs node:test directly against the build above (`npm test` would rebuild).
+      - name: Test
+        run: node --test build/tests/*.test.js
+
+      - name: Verify package contents
+        if: matrix.node == 22
+        run: |
+          npm pack --dry-run --json > "$RUNNER_TEMP/pack.json"
+          node -e '
+            const files = require(process.argv[1])[0].files.map(f => f.path);
+            if (!files.includes("build/index.js")) throw new Error("build/index.js missing from package");
+            const leaked = files.filter(p => p.startsWith("build/tests/"));
+            if (leaked.length) throw new Error("tests leaked into package: " + leaked.join(", "));
+            console.log(`package OK: ${files.length} files`);
+          ' "$RUNNER_TEMP/pack.json"
