@@ -61,7 +61,7 @@
     "@types/minimatch": "^5.1.2",
     "@types/node": "^22.15.29",
     "@types/tar-stream": "^3.1.4",
-    "conventional-changelog-conventionalcommits": "^10.4.0",
+    "conventional-changelog-conventionalcommits": "^8.0.0",
     "husky": "^9.1.7",
     "semantic-release": "^25.0.9",
     "typescript": "^5.8.3"
