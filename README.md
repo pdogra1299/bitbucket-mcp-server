@@ -111,6 +111,29 @@ Every numeric policy is environment-tunable — nothing is hard-coded. The full 
 | `BITBUCKET_HTTP_TIMEOUT_MS` | `30000` | Per-request timeout |
 | `BITBUCKET_TOOL_GROUPS` | all | Comma-separated groups to expose (validated, enforced at dispatch, fails closed) |
 
+### mTLS (client certificate) authentication
+
+For Bitbucket Server/DC behind a gateway that requires client certificates, point these at PEM files. The certificate can stand alone (no token) or be layered with `BITBUCKET_TOKEN`:
+
+| Variable | Purpose |
+|---|---|
+| `BITBUCKET_TLS_CLIENT_CERT` | Client certificate; requires `BITBUCKET_TLS_CLIENT_KEY` |
+| `BITBUCKET_TLS_CLIENT_KEY` | Client private key; requires `BITBUCKET_TLS_CLIENT_CERT` |
+| `BITBUCKET_TLS_CA_CERT` | CA bundle, when the server's certificate is signed by a private CA |
+| `BITBUCKET_TLS_REJECT_UNAUTHORIZED` | `false` disables server certificate verification (development only) |
+
+```json
+"env": {
+  "BITBUCKET_USERNAME": "your.email@company.com",
+  "BITBUCKET_BASE_URL": "https://bitbucket.yourcompany.com",
+  "BITBUCKET_TLS_CLIENT_CERT": "/path/to/client.pem",
+  "BITBUCKET_TLS_CLIENT_KEY": "/path/to/client.key",
+  "BITBUCKET_TLS_CA_CERT": "/path/to/ca-chain.pem"
+}
+```
+
+Missing files or a certificate without its key fail at startup with a clear error.
+
 ### The grep engine's guarantees
 
 - **Memory-bounded**: the archive is streamed, never buffered whole; the cache is a hard byte budget with LRU eviction and content-hash dedup across branches. Worst case = budget + a few MB transient.

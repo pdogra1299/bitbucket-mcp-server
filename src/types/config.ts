@@ -11,6 +11,21 @@ export type ConfigAuth = {
   token?: string;
 };
 
+/**
+ * TLS client settings for Bitbucket Server/DC instances behind mTLS
+ * (client-certificate) gateways. Paths are read at client construction.
+ */
+export type ConfigTls = {
+  /** PEM client certificate; requires clientKeyPath. */
+  clientCertPath?: string;
+  /** PEM client private key; requires clientCertPath. */
+  clientKeyPath?: string;
+  /** PEM CA bundle for servers signed by a private CA. */
+  caCertPath?: string;
+  /** false disables server certificate verification (development only). */
+  rejectUnauthorized: boolean;
+};
+
 export type ConfigHttp = {
   /** Per-request timeout for normal REST calls (ms). */
   timeoutMs: number;
@@ -171,6 +186,7 @@ export type ConfigOutput = {
 
 export type BitbucketMcpConfig = {
   auth: ConfigAuth;
+  tls: ConfigTls;
   http: ConfigHttp;
   rateLimit: ConfigRateLimit;
   retry: ConfigRetry;

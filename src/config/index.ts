@@ -80,6 +80,12 @@ export function loadConfig(env: Env = process.env): BitbucketMcpConfig {
       appPassword: pick(env, ['BITBUCKET_APP_PASSWORD']),
       token: pick(env, ['BITBUCKET_TOKEN']),
     },
+    tls: {
+      clientCertPath: pick(env, ['BITBUCKET_TLS_CLIENT_CERT']),
+      clientKeyPath: pick(env, ['BITBUCKET_TLS_CLIENT_KEY']),
+      caCertPath: pick(env, ['BITBUCKET_TLS_CA_CERT']),
+      rejectUnauthorized: envBool(env, ['BITBUCKET_TLS_REJECT_UNAUTHORIZED'], true),
+    },
     http: {
       timeoutMs: envNum(env, ['BITBUCKET_HTTP_TIMEOUT_MS'], 30_000, { min: 0 }),
       archiveTimeoutMs: envNum(env, ['BITBUCKET_ARCHIVE_TIMEOUT_MS'], 300_000, { min: 0 }),
@@ -172,6 +178,10 @@ export const CONFIG_REFERENCE: Array<{ env: string; def: string; description: st
   { env: 'BITBUCKET_USERNAME', def: '(required)', description: 'Username the credentials belong to' },
   { env: 'BITBUCKET_APP_PASSWORD', def: '—', description: 'Bitbucket Cloud app password (basic auth)' },
   { env: 'BITBUCKET_TOKEN', def: '—', description: 'Bitbucket Server/DC personal access token (bearer)' },
+  { env: 'BITBUCKET_TLS_CLIENT_CERT', def: '—', description: 'Client certificate PEM for mTLS-protected Server/DC (needs BITBUCKET_TLS_CLIENT_KEY)' },
+  { env: 'BITBUCKET_TLS_CLIENT_KEY', def: '—', description: 'Client private key PEM for mTLS (needs BITBUCKET_TLS_CLIENT_CERT)' },
+  { env: 'BITBUCKET_TLS_CA_CERT', def: '—', description: 'CA bundle PEM for servers signed by a private CA' },
+  { env: 'BITBUCKET_TLS_REJECT_UNAUTHORIZED', def: 'true', description: 'false disables server certificate verification (development only)' },
   { env: 'BITBUCKET_HTTP_TIMEOUT_MS', def: '30000', description: 'Per-request timeout for REST calls' },
   { env: 'BITBUCKET_ARCHIVE_TIMEOUT_MS', def: '300000', description: 'Timeout for archive (tar.gz) download streams' },
   { env: 'BITBUCKET_ARCHIVE_STALL_MS', def: '60000', description: 'Destroy an archive stream after this much inactivity' },

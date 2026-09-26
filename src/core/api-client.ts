@@ -2,13 +2,14 @@ import axios, { AxiosInstance } from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import FormData from 'form-data';
-import { createReadStream } from 'fs';
+import { createReadStream, existsSync, readFileSync } from 'fs';
 import { basename } from 'path';
 import type { Readable } from 'stream';
 import type {
   ApiError,
   ApiRequestOptions,
   BitbucketMcpConfig,
+  ConfigTls,
   BitbucketServerBuildSummary,
   UploadedAttachment,
 } from '../types/index.js';
@@ -29,9 +30,38 @@ export function encodeRepoPath(path: string): string {
   return path.split('/').map(encodeURIComponent).join('/');
 }
 
+/** True when any mTLS client/CA setting is present. */
+export function hasTlsClientConfig(tls: ConfigTls): boolean {
+  return !!(tls.clientCertPath || tls.clientKeyPath || tls.caCertPath);
+}
+
+/**
+ * Reads the configured TLS files into https.Agent options. Throws on a
+ * missing file or a certificate without its key (or vice versa) so a
+ * misconfigured mTLS setup fails at startup, not on the first request.
+ */
+export function tlsAgentOptions(tls: ConfigTls): { cert?: Buffer; key?: Buffer; ca?: Buffer; rejectUnauthorized?: boolean } {
+  if (!!tls.clientCertPath !== !!tls.clientKeyPath) {
+    throw new Error(
+      'mTLS requires both a client certificate (BITBUCKET_TLS_CLIENT_CERT) and a client key (BITBUCKET_TLS_CLIENT_KEY).'
+    );
+  }
+  const read = (path: string, label: string): Buffer => {
+    if (!existsSync(path)) throw new Error(`${label} file not found: ${path}`);
+    return readFileSync(path);
+  };
+  const opts: { cert?: Buffer; key?: Buffer; ca?: Buffer; rejectUnauthorized?: boolean } = {};
+  if (tls.clientCertPath) opts.cert = read(tls.clientCertPath, 'Client certificate');
+  if (tls.clientKeyPath) opts.key = read(tls.clientKeyPath, 'Client key');
+  if (tls.caCertPath) opts.ca = read(tls.caCertPath, 'CA certificate');
+  if (!tls.rejectUnauthorized) opts.rejectUnauthorized = false;
+  return opts;
+}
+
 export class BitbucketApiClient {
   private axiosInstance: AxiosInstance;
   private isServer: boolean;
+  private usesMtls: boolean;
   private bucket: TokenBucket;
   private semaphore: Semaphore;
   private archiveSemaphore: Semaphore;
@@ -39,8 +69,10 @@ export class BitbucketApiClient {
   private refMemo: TtlMemo<string>;
 
   constructor(private readonly config: BitbucketMcpConfig) {
-    const { auth, http, rateLimit, snapshot } = config;
-    this.isServer = !!auth.token;
+    const { auth, tls, http, rateLimit, snapshot } = config;
+    this.usesMtls = hasTlsClientConfig(tls);
+    // Bitbucket Cloud has no mTLS, so a client certificate implies Server/DC.
+    this.isServer = !!auth.token || this.usesMtls;
     this.bucket = new TokenBucket(rateLimit.ratePerSec, rateLimit.burst);
     this.semaphore = new Semaphore(rateLimit.maxConcurrent);
     this.archiveSemaphore = new Semaphore(rateLimit.maxConcurrentArchives);
@@ -51,11 +83,13 @@ export class BitbucketApiClient {
       timeout: http.timeoutMs,
       headers: { 'Content-Type': 'application/json' },
       httpAgent: new HttpAgent({ keepAlive: http.keepAlive, maxSockets: http.maxSockets }),
-      httpsAgent: new HttpsAgent({ keepAlive: http.keepAlive, maxSockets: http.maxSockets }),
+      httpsAgent: new HttpsAgent({ keepAlive: http.keepAlive, maxSockets: http.maxSockets, ...tlsAgentOptions(tls) }),
     };
+    // Application-level auth is layered on top of mTLS; with a client
+    // certificate alone, no Authorization header is sent.
     if (auth.token) {
       axiosConfig.headers['Authorization'] = `Bearer ${auth.token}`;
-    } else {
+    } else if (auth.appPassword) {
       axiosConfig.auth = { username: auth.username, password: auth.appPassword };
     }
     this.axiosInstance = axios.create(axiosConfig);
@@ -190,9 +224,10 @@ export class BitbucketApiClient {
         return this.errorContent(`Not found: ${context}`);
       }
       if (status === 401) {
-        return this.errorContent(
-          `Authentication failed. Please check your ${this.isServer ? 'BITBUCKET_TOKEN' : 'BITBUCKET_USERNAME and BITBUCKET_APP_PASSWORD'}${refSuffix}`
-        );
+        const hint = this.usesMtls
+          ? 'Please check that your client certificate, key, and CA bundle are valid and trusted by the server (and BITBUCKET_TOKEN, if it also requires one)'
+          : `Please check your ${this.isServer ? 'BITBUCKET_TOKEN' : 'BITBUCKET_USERNAME and BITBUCKET_APP_PASSWORD'}`;
+        return this.errorContent(`Authentication failed. ${hint}${refSuffix}`);
       }
       if (status === 403) {
         return this.errorContent(
