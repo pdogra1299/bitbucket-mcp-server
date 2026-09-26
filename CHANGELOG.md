@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1](https://github.com/pdogra1299/bitbucket-mcp-server/compare/v3.0.0...v3.0.1) (2026-09-26)
+
+### Bug Fixes
+
+* **ci:** add ci, release and commit policy workflows ([b73ee2d](https://github.com/pdogra1299/bitbucket-mcp-server/commit/b73ee2d0f17ee7a9f8134fcd3794d4d43cf8a349))
+* **release:** pin conventionalcommits preset to v8 for writer compatibility ([e9cb095](https://github.com/pdogra1299/bitbucket-mcp-server/commit/e9cb0958f07bc1dd2a8020d7c8a9574315507f48))
+
 ## [3.0.0] - 2026-07-09
 
 Complete revamp: grep-like repo search, drastically fewer Bitbucket API calls, rate-limit-safe transport, compact token-efficient responses, and a consolidated 25-tool surface. Design and verified API research in `REVAMP_PLAN.md`.
