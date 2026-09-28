@@ -608,7 +608,7 @@ export class PullRequestHandlers {
           const existingByName = new Map((currentPr?.reviewers ?? []).map((r: any) => [r.user.name, r]));
           requestBody.reviewers = reviewers.map((username: string) => existingByName.get(username) ?? { user: { name: username } });
         } else {
-          requestBody.reviewers = currentPr.reviewers;
+          requestBody.reviewers = currentPr?.reviewers ?? [];
         }
 
         const pr = await this.withVersionRetry(
