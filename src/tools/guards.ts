@@ -155,6 +155,15 @@ export function isSetReviewStatusArgs(a: any): a is {
     ['APPROVED', 'NEEDS_WORK', 'UNAPPROVED'].includes(a.status) && optStr(a.comment);
 }
 
+export function isManageReviewerArgs(a: any): a is {
+  workspace: string; repository: string; pull_request_id: number;
+  action: 'add' | 'remove'; username?: string; role?: 'REVIEWER' | 'PARTICIPANT';
+} {
+  return repoScoped(a) && isPosInt(a.pull_request_id) &&
+    ['add', 'remove'].includes(a.action) && optStr(a.username) &&
+    (a.role === undefined || ['REVIEWER', 'PARTICIPANT'].includes(a.role as string));
+}
+
 // ── Branches & commits ───────────────────────────────────────────────────────
 
 export function isListBranchesArgs(a: any): a is {
