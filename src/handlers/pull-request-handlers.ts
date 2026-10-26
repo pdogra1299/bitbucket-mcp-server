@@ -620,7 +620,7 @@ export class PullRequestHandlers {
           const existingByName = new Map((currentPr?.reviewers ?? []).map((r: any) => [r.user.name, r]));
           requestBody.reviewers = reviewers.map((username: string) => existingByName.get(username) ?? { user: { name: username } });
         } else {
-          requestBody.reviewers = currentPr.reviewers;
+          requestBody.reviewers = currentPr?.reviewers ?? [];
         }
 
         const pr = await this.withVersionRetry(
@@ -628,7 +628,7 @@ export class PullRequestHandlers {
           async () => {
             const fresh = await this.apiClient.makeRequest<any>('get', apiPath);
             requestBody.version = fresh.version;
-            if (reviewers === undefined) requestBody.reviewers = fresh.reviewers;
+            if (reviewers === undefined) requestBody.reviewers = fresh.reviewers ?? [];
             // Attachments-only edits derived the description from the
             // pre-conflict read — rebuild from the fresh one so the retry
             // doesn't overwrite the concurrent description change.
