@@ -405,7 +405,7 @@ export const toolDefinitions: ToolDefinition[] = [
         workspace: W,
         repository: R,
         branch_name: { type: 'string' },
-        expected_head: { type: 'string', description: 'Known head SHA (compare-and-swap)' },
+        expected_head: { type: 'string', description: 'Refuse the delete unless the head matches this SHA (abbreviations allowed). Atomic compare-and-swap on Server; checked immediately before deleting on Cloud.' },
       },
       required: ['workspace', 'repository', 'branch_name'],
     },
@@ -571,7 +571,7 @@ export const toolDefinitions: ToolDefinition[] = [
   // ── Discovery ──────────────────────────────────────────────────────────────
   {
     name: 'list_projects',
-    description: 'List accessible projects/workspaces.',
+    description: 'List projects. On Cloud pass `workspace` to list its projects (the keys repositories carry); omitting it lists workspaces instead. On Server lists accessible projects.',
     group: 'discovery',
     availability: 'both',
     mutates: false,
@@ -579,6 +579,7 @@ export const toolDefinitions: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
+        workspace: { type: 'string', description: 'Workspace slug. Lists projects inside it (Cloud)' },
         name: { type: 'string', description: 'Name filter' },
         permission: { type: 'string', description: 'e.g. PROJECT_READ' },
         limit: LIMIT,

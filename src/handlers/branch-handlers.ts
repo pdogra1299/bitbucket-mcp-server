@@ -1,5 +1,5 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { BitbucketApiClient } from '../core/api-client.js';
+import { BitbucketApiClient, cloudNameFilter } from '../core/api-client.js';
 import { encodeRepoPath, encodeSegment } from '../core/paths.js';
 import { isProtectedBranch } from '../core/access.js';
 import {
@@ -59,7 +59,7 @@ export class BranchHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for list_branches');
     }
     const { workspace, repository, filter } = args;
-    const limit = args.limit ?? this.cfg.pagination.defaultListLimit;
+    const limit = this.apiClient.clampPageSize(args.limit ?? this.cfg.pagination.defaultListLimit);
     const start = args.start ?? 0;
 
     try {
@@ -87,7 +87,7 @@ export class BranchHandlers {
           'get',
           `${this.repoBase('cloud', workspace, repository)}/refs/branches`,
           undefined,
-          { params: { pagelen: limit, page: Math.floor(start / limit) + 1, ...(filter ? { q: `name ~ "${filter}"` } : {}) } }
+          { params: { pagelen: limit, page: Math.floor(start / limit) + 1, ...(filter ? { q: cloudNameFilter(filter) } : {}) } }
         );
         branches = (response.values || []).map((b: any) =>
           compactObject({ name: b.name, latest_commit: b.target?.hash?.slice(0, 12) })
@@ -246,6 +246,30 @@ export class BranchHandlers {
           if (!ok) throw deleteError;
         }
       } else {
+        // Cloud's DELETE has no compare-and-swap, so expected_head has to be
+        // enforced here rather than passed along. Unenforced, a caller guarding
+        // against a branch that moved under them gets no guard and no warning:
+        // a deliberately wrong SHA still deletes the branch. This is
+        // check-then-delete, not an atomic CAS, so a push landing in the gap
+        // still slips through. It guards a stale expectation, not a race.
+        if (expected_head) {
+          const ref = await this.apiClient.makeRequest<any>(
+            'get',
+            `${this.repoBase('cloud', workspace, repository)}/refs/branches/${encodeSegment(branch_name, 'branch_name')}`
+          );
+          const head: string | undefined = ref?.target?.hash;
+          if (!head) return errorContent(`Branch '${branch_name}' not found`);
+          const expected = String(expected_head).toLowerCase();
+          const actual = head.toLowerCase();
+          // Accept an abbreviated SHA, but only as a real prefix of a sane length.
+          const agrees = expected.length >= 7 ? actual.startsWith(expected) : actual === expected;
+          if (!agrees) {
+            return errorContent(
+              `Refusing to delete '${branch_name}': its head is ${head}, but expected_head was ${expected_head}. ` +
+                `The branch moved. Re-read it and retry if the deletion is still what you want.`
+            );
+          }
+        }
         try {
           await this.apiClient.makeRequest<any>('delete', `${this.repoBase('cloud', workspace, repository)}/refs/branches/${encodeSegment(branch_name, 'branch_name')}`);
         } catch (deleteError: any) {
@@ -271,7 +295,9 @@ export class BranchHandlers {
       workspace, repository, branch_name, since, until, author,
       include_merge_commits = true, search, include_build_status = false,
     } = args;
-    const limit = Math.min(args.limit ?? this.cfg.pagination.defaultListLimit, this.cfg.pagination.commitsPageLimit);
+    const limit = this.apiClient.clampPageSize(
+      Math.min(args.limit ?? this.cfg.pagination.defaultListLimit, this.cfg.pagination.commitsPageLimit)
+    );
     const start = args.start ?? 0;
 
     try {
