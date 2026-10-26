@@ -38,7 +38,7 @@ export function formatServerPullRequest(pr: BitbucketServerPullRequest, baseUrl?
     source_branch: pr.fromRef.displayId,
     destination_branch: pr.toRef.displayId,
     source_commit: pr.fromRef.latestCommit,
-    reviewers: pr.reviewers.map(r => reviewerLabel(r.user.displayName, r.status, r.approved)),
+    reviewers: (pr.reviewers ?? []).map(r => reviewerLabel(r.user.displayName, r.status, r.approved)),
     created_on: isoDate(pr.createdDate),
     updated_on: isoDate(pr.updatedDate),
     closed_on: isoDate((pr as any).closedDate),
@@ -63,7 +63,7 @@ export function formatCloudPullRequest(pr: BitbucketCloudPullRequest): Record<st
     author: pr.author.display_name,
     source_branch: pr.source.branch.name,
     destination_branch: pr.destination.branch.name,
-    reviewers: pr.reviewers.map(r => r.display_name),
+    reviewers: (pr.reviewers ?? []).map(r => r.display_name),
     approved_by: pr.participants?.filter(p => p.approved).map(p => p.user.display_name),
     created_on: isoDate(pr.created_on),
     updated_on: isoDate(pr.updated_on),
@@ -84,7 +84,7 @@ export function formatServerPrListItem(pr: BitbucketServerPullRequest): Record<s
     source_branch: pr.fromRef.displayId,
     destination_branch: pr.toRef.displayId,
     updated_on: isoDate(pr.updatedDate),
-    reviewers: pr.reviewers.map(r => reviewerLabel(r.user.displayName, r.status, r.approved)),
+    reviewers: (pr.reviewers ?? []).map(r => reviewerLabel(r.user.displayName, r.status, r.approved)),
     open_task_count: (pr as any).properties?.openTaskCount,
   });
 }
@@ -99,7 +99,7 @@ export function formatCloudPrListItem(pr: BitbucketCloudPullRequest): Record<str
     source_branch: pr.source.branch.name,
     destination_branch: pr.destination.branch.name,
     updated_on: isoDate(pr.updated_on),
-    reviewers: pr.reviewers.map(r => r.display_name),
+    reviewers: (pr.reviewers ?? []).map(r => r.display_name),
   });
 }
 
@@ -110,7 +110,7 @@ export function formatServerCommit(commit: BitbucketServerCommit): FormattedComm
     message: commit.message,
     author: { name: commit.author.name },
     date: isoDate(commit.authorTimestamp) ?? '',
-    is_merge_commit: commit.parents.length > 1,
+    is_merge_commit: (commit.parents?.length ?? 0) > 1,
   };
 }
 
@@ -123,7 +123,7 @@ export function formatCloudCommit(commit: BitbucketCloudCommit): FormattedCommit
     message: commit.message,
     author: { name: authorName },
     date: commit.date,
-    is_merge_commit: commit.parents.length > 1,
+    is_merge_commit: (commit.parents?.length ?? 0) > 1,
   };
 }
 
