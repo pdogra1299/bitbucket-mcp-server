@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -14,8 +15,11 @@ import { SearchHandlers } from './handlers/search-handlers.js';
 import { GrepHandlers } from './handlers/grep-handlers.js';
 import { ProjectHandlers } from './handlers/project-handlers.js';
 import { AttachmentHandlers } from './handlers/attachment-handlers.js';
+import { summarizeError } from './core/redact.js';
 
-export const SERVER_VERSION = '3.0.0';
+// Advertise the real package version (build/ sits one level below package.json
+// both in the repo and in the published tarball).
+export const SERVER_VERSION: string = (createRequire(import.meta.url)('../package.json') as { version: string }).version;
 
 export class BitbucketMcpServer {
   private server: Server;
@@ -40,7 +44,7 @@ export class BitbucketMcpServer {
     const projects = new ProjectHandlers(this.apiClient);
     const attachments = new AttachmentHandlers(this.apiClient);
 
-    this.registry = new ToolRegistry(this.apiClient.getIsServer(), config.toolGroups);
+    this.registry = new ToolRegistry(this.apiClient.getIsServer(), config.toolGroups, config.access);
     const handlers: Record<string, (args: any) => Promise<any>> = {
       get_pull_request: a => pullRequests.handleGetPullRequest(a),
       list_pull_requests: a => pullRequests.handleListPullRequests(a),
@@ -74,6 +78,12 @@ export class BitbucketMcpServer {
       if (!handler) throw new Error(`No handler wired for tool ${definition.name}`);
       this.registry.register(definition, handler);
     }
+    const known = new Set(this.registry.names());
+    for (const name of config.access.disabledTools) {
+      if (!known.has(name)) {
+        console.error(`[bitbucket-mcp] Unknown tool "${name}" in BITBUCKET_DISABLED_TOOLS — valid names: ${[...known].join(', ')}`);
+      }
+    }
 
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: this.registry.listDefinitions(),
@@ -82,7 +92,7 @@ export class BitbucketMcpServer {
       this.registry.dispatch(request.params.name, (request.params.arguments ?? {}) as Record<string, unknown>)
     );
 
-    this.server.onerror = error => console.error('[MCP Error]', error);
+    this.server.onerror = error => console.error('[MCP Error]', summarizeError(error));
     process.on('SIGINT', async () => {
       await this.server.close();
       process.exit(0);
@@ -92,8 +102,15 @@ export class BitbucketMcpServer {
   async run(): Promise<void> {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
+    const config = this.apiClient.getConfig();
+    const flags = [
+      config.access.readOnly ? 'read-only' : null,
+      config.access.disabledTools.length ? `disabled: ${config.access.disabledTools.join(',')}` : null,
+      config.access.protectedBranches.length ? `protected branches: ${config.access.protectedBranches.join(',')}` : null,
+      config.attachments.uploadRoot ? 'attachment uploads enabled' : 'attachment uploads disabled',
+    ].filter(Boolean);
     console.error(
-      `Bitbucket MCP server v${SERVER_VERSION} running on stdio (${this.apiClient.getIsServer() ? 'Server/DC' : 'Cloud'} mode)`
+      `Bitbucket MCP server v${SERVER_VERSION} running on stdio (${this.apiClient.getIsServer() ? 'Server/DC' : 'Cloud'} mode; ${flags.join('; ')})`
     );
   }
 }

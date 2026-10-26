@@ -64,6 +64,8 @@ Measured on a live Data Center instance: a repeated content search went from **5
 
 ## Installation
 
+Requires **Node.js 22 or newer** (18 and 20 are end-of-life and no longer receive security fixes).
+
 ### Using npx (recommended)
 
 ```json
@@ -110,6 +112,13 @@ Every numeric policy is environment-tunable — nothing is hard-coded. The full 
 | `BITBUCKET_STREAM_ABORT_MB` | `2048` | Abort archive scans past this many extracted MB (falls back to bounded per-file scan) |
 | `BITBUCKET_HTTP_TIMEOUT_MS` | `30000` | Per-request timeout |
 | `BITBUCKET_TOOL_GROUPS` | all | Comma-separated groups to expose (validated, enforced at dispatch, fails closed) |
+| `BITBUCKET_READ_ONLY` | `false` | Hide **and refuse** every state-changing tool (create/update/merge/decline PR, comments, review status, delete branch, attachment delete) |
+| `BITBUCKET_DISABLED_TOOLS` | — | Comma-separated tool names to hide and refuse regardless of group |
+| `BITBUCKET_PROTECTED_BRANCHES` | — | Branch names/globs (`main,release/*`; use `release/**` for nested) that `delete_branch` and `merge_pull_request` refuse to touch |
+| `BITBUCKET_ATTACHMENT_ROOT` | unset = uploads disabled | The **only** directory attachment uploads may read from (realpath-confined, regular files only) |
+| `BITBUCKET_ATTACHMENT_MAX_UPLOAD_MB` / `_DOWNLOAD_MB` | `25` | Size caps for attachment upload / download |
+| `BITBUCKET_GREP_TIMEOUT_MS` | `20000` | Wall-clock budget per content scan; exceeding it returns marked PARTIAL results |
+| `BITBUCKET_GREP_MAX_SCAN_LINE_CHARS` | `16384` | Lines longer than this are counted and reported, not regex-scanned (bounds per-line regex cost on minified files) |
 
 ### The grep engine's guarantees
 
@@ -120,6 +129,28 @@ Every numeric policy is environment-tunable — nothing is hard-coded. The full 
 ### Rate limiting
 
 All requests flow through a token bucket sized to Bitbucket DC's per-user limiter, so 429s are avoided rather than retried-after. If your instance throttles hard anyway, the error message says exactly what to do — the durable fix is asking a Bitbucket admin for a **rate-limit exemption** for the service account (Admin → Rate limiting → Exemptions), then setting `BITBUCKET_RATE_LIMIT_RPS=0`.
+
+## Security
+
+This server executes tool calls whose arguments come from an LLM, often with a write-capable token. The following controls are built in:
+
+- **Least privilege by configuration.** `BITBUCKET_READ_ONLY=true` removes every mutating tool from both `tools/list` and dispatch — recommended for autonomous agents that only need to read PRs, diffs and code. `BITBUCKET_DISABLED_TOOLS` drops individual tools; `BITBUCKET_PROTECTED_BRANCHES` blocks `delete_branch` / `merge_pull_request` against named branches or globs. Every tool carries MCP `readOnlyHint`/`destructiveHint` annotations so clients can gate confirmations.
+- **No request steering.** `workspace`, `repository`, commit ids, attachment ids and file paths are charset-validated and percent-encoded per URL segment, so a value like `PROJ/../../admin` or `repo?limit=1000` can never change the REST route a fixed-verb tool hits.
+- **Attachment uploads are opt-in and sandboxed.** Without `BITBUCKET_ATTACHMENT_ROOT` the `attachments` parameter is refused. With it, the real (symlink-resolved) path must stay inside the root, be a regular file, and fit the size cap; every rejection uses one generic message so the tool is not a filesystem existence oracle. Downloads are size-capped too.
+- **Regex denial-of-service guard.** Caller regexes (`grep` `query`, `search_code` `regex_filter`) are length-capped, rejected statically when an unbounded quantifier wraps a group with undelimited variable-width repetition (`(a+)+`, `(\w+\s*)*`), probed against adversarial inputs under a vm timeout, and every scan runs against a wall-clock deadline (`BITBUCKET_GREP_TIMEOUT_MS`) with partial results marked, never silent. Lines longer than `BITBUCKET_GREP_MAX_SCAN_LINE_CHARS` are skipped and counted. V8's linear-time regexp fallback is enabled at startup as an extra layer.
+- **Credential hygiene.** Transport errors are normalized to status + message + response headers before they reach handlers; error objects are never logged whole, and log lines are scrubbed for `Authorization`-style values. Cloud pagination follows `next` URLs only on the configured origin.
+- **Dependency floor.** Node ≥ 22; `npm run audit:prod` must report zero high/critical advisories for the published tree (enforced in CI).
+
+Recommended deployment for an autonomous agent:
+
+```json
+"env": {
+  "BITBUCKET_READ_ONLY": "true",
+  "BITBUCKET_PROTECTED_BRANCHES": "main,release/*"
+}
+```
+
+Writes (comments, approvals, merges) should then run through a separate, human-confirmed server instance or the hosting application's own approval flow.
 
 ## Migrating from v2
 

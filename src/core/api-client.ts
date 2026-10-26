@@ -2,18 +2,21 @@ import axios, { AxiosInstance } from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 import FormData from 'form-data';
-import { createReadStream } from 'fs';
-import { basename } from 'path';
+import { open as openFile } from 'fs/promises';
 import type { Readable } from 'stream';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type {
   ApiError,
   ApiRequestOptions,
   BitbucketMcpConfig,
   BitbucketServerBuildSummary,
+  ResolvedLocalFile,
   UploadedAttachment,
 } from '../types/index.js';
 import { TokenBucket, Semaphore, sleep, retryAfterMs, backoffMs } from './throttle.js';
 import { InFlightCoalescer, TtlMemo } from './cache.js';
+import { encodeSegment, isSameOrigin } from './paths.js';
+import { summarizeError } from './redact.js';
 
 // Transport core. Every request from every tool flows through makeRequest,
 // which applies: client-side pacing (token bucket sized to Bitbucket DC's
@@ -23,11 +26,6 @@ import { InFlightCoalescer, TtlMemo } from './cache.js';
 // src/config — nothing is hard-coded here.
 
 type HttpMethod = 'get' | 'post' | 'put' | 'delete';
-
-/** Percent-encode a repo file path per segment (spaces, %, #, ? in filenames). */
-export function encodeRepoPath(path: string): string {
-  return path.split('/').map(encodeURIComponent).join('/');
-}
 
 export class BitbucketApiClient {
   private axiosInstance: AxiosInstance;
@@ -117,9 +115,7 @@ export class BitbucketApiClient {
           ((status === 429) || ((retryableStatus || isNetworkError) && idempotent));
         if (!shouldRetry) throw error;
 
-        const headerMs = retryAfterMs(
-          error?.originalError?.response?.headers?.['retry-after']
-        );
+        const headerMs = retryAfterMs(error?.headers?.['retry-after']);
         const delay = Math.min(
           headerMs ?? backoffMs(attempt + 1, retry.baseDelayMs, retry.maxDelayMs),
           retry.retryAfterCapMs
@@ -153,11 +149,16 @@ export class BitbucketApiClient {
     }
   }
 
-  // Normalize any axios error into the ApiError shape handlers rely on.
+  // Normalize any axios error into the ApiError shape handlers rely on. The
+  // axios error itself is dropped here: its `config` carries the
+  // Authorization header, and anything that reaches a handler can end up in
+  // a log line or a tool response.
   private throwApiError(error: unknown): never {
     if (axios.isAxiosError(error)) {
       const status = error.response?.status;
       const respData: any = error.response?.data;
+      const rawHeaders = error.response?.headers;
+      const headers = rawHeaders ? Object.fromEntries(Object.entries(rawHeaders)) : undefined;
       let message: string = error.message;
       // A stream-typed error body (responseType:'stream' on a non-2xx) must
       // be destroyed, or its keep-alive socket never returns to the pool and
@@ -171,7 +172,7 @@ export class BitbucketApiClient {
           respData?.message ||
           error.message;
       }
-      throw { status, message, isAxiosError: true, originalError: error } as ApiError;
+      throw { status, message, isAxiosError: true, headers } as ApiError;
     }
     throw error;
   }
@@ -179,11 +180,13 @@ export class BitbucketApiClient {
   // ── Error presentation ─────────────────────────────────────────────────────
 
   handleApiError(error: any, context: string) {
-    if (error.isAxiosError) {
+    // Synthetic ApiErrors (e.g. resolveRef's 404) carry a status without
+    // isAxiosError — they must surface as normal tool errors, not be rethrown.
+    if (error?.isAxiosError || typeof error?.status === 'number') {
       const { status, message } = error as ApiError;
       // Surface Bitbucket's request id so operators can correlate a failure
       // with the exact entry in the DC access logs.
-      const arequestid = (error as ApiError).originalError?.response?.headers?.['x-arequestid'];
+      const arequestid = (error as ApiError).headers?.['x-arequestid'];
       const refSuffix = arequestid ? ` [bitbucket-ref: ${arequestid}]` : '';
 
       if (status === 404) {
@@ -200,7 +203,7 @@ export class BitbucketApiClient {
         );
       }
       if (status === 429) {
-        const retryAfter = (error as ApiError).originalError?.response?.headers?.['retry-after'];
+        const retryAfter = (error as ApiError).headers?.['retry-after'];
         return this.errorContent(
           `Rate limited by Bitbucket (HTTP 429) even after client-side pacing and retries: ${context}.` +
             `${retryAfter ? ` Retry after ${retryAfter}s.` : ''} ` +
@@ -217,6 +220,15 @@ export class BitbucketApiClient {
     return { content: [{ type: 'text', text }], isError: true };
   }
 
+  /**
+   * Cloud paginates with absolute `next` URLs that axios follows verbatim,
+   * credentials attached. Only same-origin continuations are honored.
+   */
+  safeNextUrl(next: unknown): string | null {
+    if (typeof next !== 'string' || next.length === 0) return null;
+    return isSameOrigin(this.config.auth.baseUrl, next) ? next : null;
+  }
+
   // ── Ref resolution (freshness contract) ────────────────────────────────────
 
   /**
@@ -231,9 +243,11 @@ export class BitbucketApiClient {
     const memoized = this.refMemo.get(key);
     if (memoized) return memoized;
 
+    const p = encodeSegment(project, 'workspace');
+    const r = encodeSegment(repository, 'repository');
     const apiPath = this.isServer
-      ? `/rest/api/latest/projects/${project}/repos/${repository}/commits`
-      : `/repositories/${project}/${repository}/commits${ref ? `/${encodeURIComponent(ref)}` : ''}`;
+      ? `/rest/api/latest/projects/${p}/repos/${r}/commits`
+      : `/repositories/${p}/${r}/commits${ref ? `/${encodeSegment(ref, 'ref')}` : ''}`;
     const params: any = this.isServer
       ? { limit: 1, ...(ref ? { until: ref } : {}) }
       : { pagelen: 1 };
@@ -282,7 +296,7 @@ export class BitbucketApiClient {
           if (p) params.append('path', p);
         }
         const response = await this.axiosInstance.get(
-          `/rest/api/latest/projects/${project}/repos/${repository}/archive?${params.toString()}`,
+          `/rest/api/latest/projects/${encodeSegment(project, 'workspace')}/repos/${encodeSegment(repository, 'repository')}/archive?${params.toString()}`,
           {
             responseType: 'stream',
             timeout: this.config.http.archiveTimeoutMs,
@@ -327,17 +341,17 @@ export class BitbucketApiClient {
   // ── Attachments (Server/DC only) ───────────────────────────────────────────
 
   /**
-   * Upload a file as a repository attachment. The upload POST is a
+   * Upload a file as a repository attachment. The caller must have resolved
+   * the file through resolveAttachmentFile (root/size/type checks) — this
+   * method never opens an arbitrary path. The upload POST is a
    * private/undocumented servlet; some instances reject the /rest/api/1.0
    * path with 404/405, so we fall back to the prefix-less /projects path.
    */
-  async uploadAttachment(
-    project: string,
-    repository: string,
-    filePath: string,
-    fileName?: string
-  ): Promise<UploadedAttachment> {
-    const name = fileName || basename(filePath);
+  async uploadAttachment(project: string, repository: string, file: ResolvedLocalFile): Promise<UploadedAttachment> {
+    const name = file.name;
+    // The size was checked at resolve time; the body cap guards the window
+    // between that stat and the read.
+    const bodyCap = this.config.attachments.maxUploadMb * 1024 * 1024 + 64 * 1024;
     const reqConfig = (form: FormData) => ({
       headers: {
         ...form.getHeaders(),
@@ -346,25 +360,38 @@ export class BitbucketApiClient {
         // some proxies with 405; plain */* matches curl's default.
         Accept: '*/*',
       },
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity,
+      maxBodyLength: bodyCap,
     });
-    const newForm = () => {
+    // Open, then verify the fd is still the validated inode (closes the
+    // check→open window a symlink swap inside the root could exploit).
+    const newForm = async () => {
+      const handle = await openFile(file.path, 'r');
+      try {
+        const st = await handle.stat();
+        if (!st.isFile() || st.dev !== file.dev || st.ino !== file.ino || st.size !== file.size) {
+          throw new McpError(ErrorCode.InvalidParams, 'Attachment rejected: the file changed between validation and upload.');
+        }
+      } catch (error) {
+        await handle.close();
+        throw error;
+      }
       const form = new FormData();
-      form.append('files', createReadStream(filePath), { filename: name });
+      form.append('files', handle.createReadStream(), { filename: name, knownLength: file.size });
       return form;
     };
 
-    const primaryPath = `/projects/${project}/repos/${repository}/attachments`;
-    const fallbackPath = `/rest/api/1.0/projects/${project}/repos/${repository}/attachments`;
+    const p = encodeSegment(project, 'workspace');
+    const r = encodeSegment(repository, 'repository');
+    const primaryPath = `/projects/${p}/repos/${r}/attachments`;
+    const fallbackPath = `/rest/api/1.0/projects/${p}/repos/${r}/attachments`;
 
     let data: any;
     try {
-      const form = newForm();
+      const form = await newForm();
       data = await this.pacedPost(primaryPath, form, reqConfig(form));
     } catch (error: any) {
       if (error?.isAxiosError && (error.status === 404 || error.status === 405)) {
-        const form = newForm();
+        const form = await newForm();
         data = await this.pacedPost(fallbackPath, form, reqConfig(form));
       } else {
         throw error;
@@ -401,7 +428,7 @@ export class BitbucketApiClient {
     }
   }
 
-  /** Download an attachment's raw bytes (Server/DC only). */
+  /** Download an attachment's raw bytes (Server/DC only), capped at attachments.maxDownloadMb. */
   async downloadAttachment(
     project: string,
     repository: string,
@@ -411,8 +438,12 @@ export class BitbucketApiClient {
     const release = await this.semaphore.acquire();
     try {
       const response = await this.axiosInstance.get(
-        `/rest/api/1.0/projects/${project}/repos/${repository}/attachments/${attachmentId}`,
-        { responseType: 'arraybuffer', headers: { Accept: '*/*' } }
+        `/rest/api/1.0/projects/${encodeSegment(project, 'workspace')}/repos/${encodeSegment(repository, 'repository')}/attachments/${encodeSegment(attachmentId, 'attachment_id')}`,
+        {
+          responseType: 'arraybuffer',
+          headers: { Accept: '*/*' },
+          maxContentLength: this.config.attachments.maxDownloadMb * 1024 * 1024,
+        }
       );
       return {
         data: Buffer.from(response.data),
@@ -436,7 +467,7 @@ export class BitbucketApiClient {
     try {
       return await this.makeRequest<BitbucketServerBuildSummary>(
         'get',
-        `/rest/ui/latest/projects/${workspace}/repos/${repository}/build-summaries`,
+        `/rest/ui/latest/projects/${encodeSegment(workspace, 'workspace')}/repos/${encodeSegment(repository, 'repository')}/build-summaries`,
         undefined,
         {
           params: { commitId: commitIds },
@@ -450,7 +481,8 @@ export class BitbucketApiClient {
       );
     } catch (error) {
       // Graceful degradation — build status is enrichment, never load-bearing.
-      console.error('Failed to fetch build summaries:', error);
+      // Summary only: the raw error would carry the Authorization header.
+      console.error('[bitbucket-mcp] build summaries unavailable:', summarizeError(error));
       return {};
     }
   }

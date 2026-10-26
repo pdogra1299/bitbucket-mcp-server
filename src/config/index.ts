@@ -47,6 +47,12 @@ function envBool(env: Env, names: string[], fallback: boolean): boolean {
   return !['false', '0', 'no', 'off'].includes(raw.toLowerCase());
 }
 
+function envList(env: Env, names: string[]): string[] {
+  const raw = pick(env, names);
+  if (!raw) return [];
+  return raw.split(',').map(s => s.trim()).filter(Boolean);
+}
+
 function parseToolGroups(env: Env): string[] | null {
   const raw = pick(env, ['BITBUCKET_TOOL_GROUPS']);
   if (!raw) return null;
@@ -124,6 +130,11 @@ export function loadConfig(env: Env = process.env): BitbucketMcpConfig {
       defaultContext: envNum(env, ['BITBUCKET_GREP_DEFAULT_CONTEXT'], 0, { min: 0 }),
       maxContext: envNum(env, ['BITBUCKET_GREP_MAX_CONTEXT'], 10, { min: 0 }),
       maxLineLength: envNum(env, ['BITBUCKET_GREP_MAX_LINE_LENGTH'], 300, { min: 40 }),
+      maxPatternLength: envNum(env, ['BITBUCKET_GREP_MAX_PATTERN_LENGTH'], 512, { min: 8 }),
+      maxGlobLength: envNum(env, ['BITBUCKET_GREP_MAX_GLOB_LENGTH'], 512, { min: 8 }),
+      regexProbeTimeoutMs: envNum(env, ['BITBUCKET_REGEX_PROBE_TIMEOUT_MS'], 100, { min: 10, max: 5_000 }),
+      scanTimeoutMs: envNum(env, ['BITBUCKET_GREP_TIMEOUT_MS'], 20_000, { min: 1_000 }),
+      maxScanLineChars: envNum(env, ['BITBUCKET_GREP_MAX_SCAN_LINE_CHARS'], 16_384, { min: 1_000 }),
     },
     scan: {
       defaultParallelism: envNum(env, ['BITBUCKET_DEFAULT_PARALLELISM'], 4, { min: 1 }),
@@ -158,6 +169,16 @@ export function loadConfig(env: Env = process.env): BitbucketMcpConfig {
       fileContentMaxKb: envNum(env, ['BITBUCKET_FILE_CONTENT_MAX_KB'], 512, { min: 8 }),
       excludedListMax: envNum(env, ['BITBUCKET_EXCLUDED_LIST_MAX'], 10, { min: 0 }),
       snippetMatchListMax: envNum(env, ['BITBUCKET_SNIPPET_MATCH_LIST_MAX'], 5, { min: 1 }),
+    },
+    access: {
+      readOnly: envBool(env, ['BITBUCKET_READ_ONLY'], false),
+      disabledTools: envList(env, ['BITBUCKET_DISABLED_TOOLS']),
+      protectedBranches: envList(env, ['BITBUCKET_PROTECTED_BRANCHES']),
+    },
+    attachments: {
+      uploadRoot: pick(env, ['BITBUCKET_ATTACHMENT_ROOT']),
+      maxUploadMb: envNum(env, ['BITBUCKET_ATTACHMENT_MAX_UPLOAD_MB'], 25, { min: 1 }),
+      maxDownloadMb: envNum(env, ['BITBUCKET_ATTACHMENT_MAX_DOWNLOAD_MB'], 25, { min: 1 }),
     },
     toolGroups: parseToolGroups(env),
   };
@@ -200,6 +221,11 @@ export const CONFIG_REFERENCE: Array<{ env: string; def: string; description: st
   { env: 'BITBUCKET_GREP_DEFAULT_CONTEXT', def: '0', description: 'Default context lines around grep matches' },
   { env: 'BITBUCKET_GREP_MAX_CONTEXT', def: '10', description: 'Max context lines' },
   { env: 'BITBUCKET_GREP_MAX_LINE_LENGTH', def: '300', description: 'Display truncation for match lines (marked when applied)' },
+  { env: 'BITBUCKET_GREP_MAX_PATTERN_LENGTH', def: '512', description: 'Longest regex accepted from a caller' },
+  { env: 'BITBUCKET_GREP_MAX_GLOB_LENGTH', def: '512', description: 'Longest glob accepted from a caller' },
+  { env: 'BITBUCKET_REGEX_PROBE_TIMEOUT_MS', def: '100', description: 'Adversarial-input probe budget a caller regex must pass (ReDoS guard)' },
+  { env: 'BITBUCKET_GREP_TIMEOUT_MS', def: '20000', description: 'Wall-clock budget per content scan; exceeding it returns marked PARTIAL results' },
+  { env: 'BITBUCKET_GREP_MAX_SCAN_LINE_CHARS', def: '16384', description: 'Lines longer than this are not regex-scanned (counted, reported) — bounds per-line regex cost' },
   { env: 'BITBUCKET_DEFAULT_PARALLELISM', def: '4', description: 'Fan-out fallback: concurrent per-file fetches' },
   { env: 'BITBUCKET_MAX_PARALLELISM', def: '20', description: 'Fan-out fallback: parallelism cap' },
   { env: 'BITBUCKET_MAX_SCAN_FILES', def: '3000', description: 'Fan-out fallback: max files fetched per scan' },
@@ -228,4 +254,10 @@ export const CONFIG_REFERENCE: Array<{ env: string; def: string; description: st
   { env: 'BITBUCKET_EXCLUDED_LIST_MAX', def: '10', description: 'Excluded-file paths listed on filtered diffs' },
   { env: 'BITBUCKET_SNIPPET_MATCH_LIST_MAX', def: '5', description: 'Occurrences listed on ambiguous code_snippet' },
   { env: 'BITBUCKET_TOOL_GROUPS', def: '(all)', description: 'Comma-separated tool groups to expose; validated, enforced on call' },
+  { env: 'BITBUCKET_READ_ONLY', def: 'false', description: 'Hide and refuse every state-changing tool (merge, decline, delete, comment, approve, attachment delete)' },
+  { env: 'BITBUCKET_DISABLED_TOOLS', def: '—', description: 'Comma-separated tool names to hide and refuse regardless of group' },
+  { env: 'BITBUCKET_PROTECTED_BRANCHES', def: '—', description: 'Comma-separated branch names/globs delete_branch and merge_pull_request refuse to touch' },
+  { env: 'BITBUCKET_ATTACHMENT_ROOT', def: '(uploads disabled)', description: 'Only directory attachment uploads may read from; realpath must stay inside it' },
+  { env: 'BITBUCKET_ATTACHMENT_MAX_UPLOAD_MB', def: '25', description: 'Max size of one uploaded attachment' },
+  { env: 'BITBUCKET_ATTACHMENT_MAX_DOWNLOAD_MB', def: '25', description: 'Max size of one downloaded attachment (larger downloads are refused)' },
 ];

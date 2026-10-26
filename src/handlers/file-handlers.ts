@@ -1,5 +1,6 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { BitbucketApiClient, encodeRepoPath } from '../core/api-client.js';
+import { BitbucketApiClient } from '../core/api-client.js';
+import { encodeRepoPath, encodeSegment } from '../core/paths.js';
 import {
   isListDirectoryContentArgs,
   isGetFileContentArgs,
@@ -23,6 +24,14 @@ const SERVER_MAX_SOURCE_LINE_LENGTH = 5000;
 export class FileHandlers {
   constructor(private apiClient: BitbucketApiClient) {}
 
+  private serverRepo(workspace: string, repository: string): string {
+    return `/rest/api/1.0/projects/${encodeSegment(workspace, 'workspace')}/repos/${encodeSegment(repository, 'repository')}`;
+  }
+
+  private cloudRepo(workspace: string, repository: string): string {
+    return `/repositories/${encodeSegment(workspace, 'workspace')}/${encodeSegment(repository, 'repository')}`;
+  }
+
   // ── list_directory_content ─────────────────────────────────────────────────
 
   async handleListDirectoryContent(args: any): Promise<ToolResponse> {
@@ -36,7 +45,7 @@ export class FileHandlers {
       const entries: Array<{ name: string; isDir: boolean }> = [];
       let truncated = false;
       if (this.apiClient.getIsServer()) {
-        let apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/browse`;
+        let apiPath = `${this.serverRepo(workspace, repository)}/browse`;
         if (dirPath) apiPath += `/${encodeRepoPath(dirPath)}`;
         let start = 0;
         for (let page = 0; page < pagination.browseMaxPages; page++) {
@@ -55,8 +64,8 @@ export class FileHandlers {
           start = typeof children.nextPageStart === 'number' ? children.nextPageStart : start + (children.values?.length ?? 0);
         }
       } else {
-        const branchOrDefault = branch || 'HEAD';
-        let url: string | null = `/repositories/${workspace}/${repository}/src/${branchOrDefault}${dirPath ? `/${dirPath}` : ''}`;
+        const branchOrDefault = encodeSegment(branch || 'HEAD', 'branch');
+        let url: string | null = `${this.cloudRepo(workspace, repository)}/src/${branchOrDefault}${dirPath ? `/${encodeRepoPath(dirPath)}` : ''}`;
         let params: any | undefined = { pagelen: pagination.dirPageLimit };
         for (let page = 0; page < pagination.browseMaxPages && url; page++) {
           const response: any = await this.apiClient.makeRequest<any>('get', url, undefined, params ? { params } : undefined);
@@ -66,10 +75,12 @@ export class FileHandlers {
               isDir: e.type !== 'commit_file',
             }))
           );
-          url = response.next || null;
+          // Only same-origin `next` URLs are followed (credentials ride along).
+          url = response.next ? this.apiClient.safeNextUrl(response.next) : null;
+          if (response.next && !url) truncated = true;
           params = undefined;
         }
-        truncated = url !== null;
+        truncated = truncated || url !== null;
       }
 
       entries.sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1));
@@ -103,7 +114,7 @@ export class FileHandlers {
       // Server: one windowed browse call.
       const startIdx = start_line !== undefined ? Math.max(0, start_line - 1) : 0;
       const requested = line_count ?? pagination.browsePageLines;
-      const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/browse/${encodeRepoPath(file_path)}`;
+      const apiPath = `${this.serverRepo(workspace, repository)}/browse/${encodeRepoPath(file_path)}`;
       const params: any = { start: startIdx, limit: Math.min(requested, pagination.browsePageLines) };
       if (branch) params.at = `refs/heads/${branch}`;
       const response = await this.apiClient.makeRequest<any>('get', apiPath, undefined, { params });
@@ -148,15 +159,15 @@ export class FileHandlers {
       if (branch) params.at = `refs/heads/${branch}`;
       raw = await this.apiClient.makeRequest<string>(
         'get',
-        `/rest/api/1.0/projects/${workspace}/repos/${repository}/raw/${encodeRepoPath(file_path)}`,
+        `${this.serverRepo(workspace, repository)}/raw/${encodeRepoPath(file_path)}`,
         undefined,
         { params, responseType: 'text', headers: { Accept: 'text/plain' } }
       );
     } else {
-      const branchOrDefault = branch || 'HEAD';
+      const branchOrDefault = encodeSegment(branch || 'HEAD', 'branch');
       raw = await this.apiClient.makeRequest<string>(
         'get',
-        `/repositories/${workspace}/${repository}/src/${branchOrDefault}/${file_path}`,
+        `${this.cloudRepo(workspace, repository)}/src/${branchOrDefault}/${encodeRepoPath(file_path)}`,
         undefined,
         { responseType: 'text', headers: { Accept: 'text/plain' } }
       );
@@ -209,7 +220,7 @@ export class FileHandlers {
     const { pagination } = this.apiClient.getConfig();
 
     try {
-      const apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/browse/${encodeRepoPath(file_path)}`;
+      const apiPath = `${this.serverRepo(workspace, repository)}/browse/${encodeRepoPath(file_path)}`;
       const baseParams: any = { blame: 'true', noContent: 'true' };
       if (branch) baseParams.at = `refs/heads/${branch}`;
 

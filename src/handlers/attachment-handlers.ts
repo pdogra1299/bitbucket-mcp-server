@@ -1,5 +1,6 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { BitbucketApiClient } from '../core/api-client.js';
+import { encodeSegment } from '../core/paths.js';
 import { isManageAttachmentsArgs } from '../tools/guards.js';
 import { errorContent, textContent } from '../formatting/respond.js';
 import type { ToolResponse } from '../types/index.js';
@@ -8,7 +9,10 @@ import type { ToolResponse } from '../types/index.js';
 // Uploading + embedding is the `attachments` param on add_comment /
 // create_pull_request / update_pull_request. Bitbucket has no list API.
 // v3: text downloads are capped (config output.attachmentTextMaxKb) so a
-// multi-MB log attachment can no longer flood the model context.
+// multi-MB log attachment can no longer flood the model context; the raw
+// download itself is capped at attachments.maxDownloadMb. `delete` is the
+// only write here and is refused under BITBUCKET_READ_ONLY (the tool stays
+// listed so downloads keep working in read-only deployments).
 
 export class AttachmentHandlers {
   constructor(private apiClient: BitbucketApiClient) {}
@@ -27,6 +31,9 @@ export class AttachmentHandlers {
       case 'download':
         return this.download(workspace, repository, attachmentId);
       case 'delete':
+        if (this.apiClient.getConfig().access.readOnly) {
+          return errorContent('Refused: the server is running read-only (BITBUCKET_READ_ONLY); attachment deletion is a write.');
+        }
         return this.delete(workspace, repository, attachmentId);
       default:
         throw new McpError(ErrorCode.InvalidParams, `Unknown action: ${action}`);
@@ -59,7 +66,12 @@ export class AttachmentHandlers {
       return textContent(
         `Attachment ${attachmentId}: ${mime}, ${sizeKB} KB — cannot be displayed as text or image; download it from Bitbucket directly.`
       );
-    } catch (error) {
+    } catch (error: any) {
+      if (error?.isAxiosError && error.status === undefined && /maxContentLength/i.test(String(error.message))) {
+        return errorContent(
+          `Attachment ${attachmentId} exceeds the ${this.apiClient.getConfig().attachments.maxDownloadMb} MB download cap (BITBUCKET_ATTACHMENT_MAX_DOWNLOAD_MB); download it from Bitbucket directly.`
+        );
+      }
       return this.apiClient.handleApiError(error, `downloading attachment ${attachmentId} in ${workspace}/${repository}`) as ToolResponse;
     }
   }
@@ -68,7 +80,7 @@ export class AttachmentHandlers {
     try {
       await this.apiClient.makeRequest(
         'delete',
-        `/rest/api/1.0/projects/${workspace}/repos/${repository}/attachments/${attachmentId}`
+        `/rest/api/1.0/projects/${encodeSegment(workspace, 'workspace')}/repos/${encodeSegment(repository, 'repository')}/attachments/${encodeSegment(attachmentId, 'attachment_id')}`
       );
       return textContent(`Attachment ${attachmentId} deleted from ${workspace}/${repository}.`);
     } catch (error: any) {

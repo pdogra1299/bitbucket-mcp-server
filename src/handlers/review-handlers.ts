@@ -1,5 +1,6 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { BitbucketApiClient, encodeRepoPath } from '../core/api-client.js';
+import { BitbucketApiClient } from '../core/api-client.js';
+import { encodeRepoPath, encodeSegment } from '../core/paths.js';
 import { isGetPullRequestDiffArgs, isSetReviewStatusArgs } from '../tools/guards.js';
 import { DiffParser } from '../formatting/diff-parser.js';
 import { textContent } from '../formatting/respond.js';
@@ -31,13 +32,16 @@ export class ReviewHandlers {
     try {
       let apiPath: string;
       const reqConfig: any = { headers: { Accept: 'text/plain' }, responseType: 'text' };
+      const w = encodeSegment(workspace, 'workspace');
+      const r = encodeSegment(repository, 'repository');
+      const id = encodeSegment(String(pull_request_id), 'pull_request_id');
       if (this.apiClient.getIsServer()) {
-        apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/diff`;
+        apiPath = `/rest/api/1.0/projects/${w}/repos/${r}/pull-requests/${id}/diff`;
         if (file_path) apiPath += `/${encodeRepoPath(file_path)}`;
         reqConfig.params = { contextLines: context_lines };
         if (args.ignore_whitespace) reqConfig.params.whitespace = 'ignore-all';
       } else {
-        apiPath = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/diff`;
+        apiPath = `/repositories/${w}/${r}/pullrequests/${id}/diff`;
         reqConfig.params = { context: context_lines };
         if (file_path) reqConfig.params.path = file_path;
       }
@@ -101,17 +105,20 @@ export class ReviewHandlers {
 
     try {
       const username = this.username.replace(/[@+]/g, '_');
+      const w = encodeSegment(workspace, 'workspace');
+      const r = encodeSegment(repository, 'repository');
+      const id = encodeSegment(String(pull_request_id), 'pull_request_id');
       let statusNote = '';
       if (this.apiClient.getIsServer()) {
         await this.apiClient.makeRequest<any>(
           'put',
-          `/rest/api/latest/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/participants/${username}`,
+          `/rest/api/latest/projects/${w}/repos/${r}/pull-requests/${id}/participants/${encodeSegment(username, 'username')}`,
           { status },
           undefined,
           { idempotent: true }
         );
       } else {
-        const base = `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}`;
+        const base = `/repositories/${w}/${r}/pullrequests/${id}`;
         if (status === 'APPROVED') {
           await this.apiClient.makeRequest<any>('post', `${base}/approve`);
         } else if (status === 'NEEDS_WORK') {
@@ -136,8 +143,8 @@ export class ReviewHandlers {
 
       if (comment) {
         const commentPath = this.apiClient.getIsServer()
-          ? `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests/${pull_request_id}/comments`
-          : `/repositories/${workspace}/${repository}/pullrequests/${pull_request_id}/comments`;
+          ? `/rest/api/1.0/projects/${w}/repos/${r}/pull-requests/${id}/comments`
+          : `/repositories/${w}/${r}/pullrequests/${id}/comments`;
         const body = this.apiClient.getIsServer() ? { text: comment } : { content: { raw: comment } };
         await this.apiClient.makeRequest<any>('post', commentPath, body);
       }

@@ -13,6 +13,10 @@ export type ScanOutcome = {
   results: Array<{ path: string; matches: Array<{ line: number; text: string }> }>;
   failures: ScanFailure[];
   rate_limited: boolean;
+  /** True when the wall-clock deadline stopped the scan early (results kept). */
+  timed_out: boolean;
+  /** Lines longer than maxScanLineLength that were not regex-scanned. */
+  long_lines_skipped: number;
   /** Files attempted before an early abort (or total when not aborted). */
   aborted_after: number;
 };
@@ -22,7 +26,7 @@ function statusOf(err: any): number | undefined {
 }
 
 function retryAfterMsOf(err: any): number | undefined {
-  const headers = err?.originalError?.response?.headers ?? err?.response?.headers;
+  const headers = err?.headers ?? err?.response?.headers;
   const raw = headers?.['retry-after'];
   if (raw === undefined) return undefined;
   const seconds = Number(raw);
@@ -36,20 +40,31 @@ export async function scanFilesConcurrent(args: {
   fetchContent: (filePath: string) => Promise<string>;
   contentRe: RegExp;
   filterFn?: (line: string) => boolean;
+  /** Epoch-ms wall-clock deadline; the scan stops (results kept, marked) when passed. */
+  deadlineAt?: number;
+  /** Lines longer than this are counted, not scanned (bounds per-line regex cost). */
+  maxScanLineLength?: number;
 }): Promise<ScanOutcome> {
-  const { files, parallelism, scanConfig, fetchContent, contentRe, filterFn } = args;
+  const { files, parallelism, scanConfig, fetchContent, contentRe, filterFn, deadlineAt, maxScanLineLength } = args;
+  const lineStats = { longLinesSkipped: 0 };
 
   const results: ScanOutcome['results'] = [];
   const failures: ScanOutcome['failures'] = [];
   let i = 0;
   let aborted = false;
   let rateLimited = false;
+  let timedOut = false;
   const workers: Promise<void>[] = [];
   const workerCount = Math.max(1, Math.min(parallelism, files.length));
 
   const next = async (): Promise<void> => {
     while (true) {
       if (aborted) return;
+      if (deadlineAt !== undefined && Date.now() > deadlineAt) {
+        timedOut = true;
+        aborted = true;
+        return;
+      }
       const idx = i++;
       if (idx >= files.length) return;
       const filePath = files[idx];
@@ -81,7 +96,7 @@ export async function scanFilesConcurrent(args: {
         continue; // 403 and other per-file failures: skip the file, keep scanning
       }
 
-      const matches = scanContent(content as string, contentRe, filterFn);
+      const matches = scanContent(content as string, contentRe, filterFn, { maxScanLineLength, stats: lineStats });
       if (matches.length > 0) results.push({ path: filePath, matches });
     }
   };
@@ -90,19 +105,32 @@ export async function scanFilesConcurrent(args: {
   await Promise.all(workers);
 
   results.sort((a, b) => a.path.localeCompare(b.path));
-  return { results, failures, rate_limited: rateLimited, aborted_after: Math.min(i, files.length) };
+  return {
+    results,
+    failures,
+    rate_limited: rateLimited,
+    timed_out: timedOut,
+    long_lines_skipped: lineStats.longLinesSkipped,
+    aborted_after: Math.min(i, files.length),
+  };
 }
 
 export function scanContent(
   content: string,
   contentRe: RegExp,
-  filterFn?: (line: string) => boolean
+  filterFn?: (line: string) => boolean,
+  opts: { maxScanLineLength?: number; stats?: { longLinesSkipped: number } } = {}
 ): Array<{ line: number; text: string }> {
+  const maxLen = opts.maxScanLineLength ?? Infinity;
   const lines = content.split('\n');
   const out: Array<{ line: number; text: string }> = [];
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw; // CRLF: keep $-anchored regexes working
+    if (line.length > maxLen) {
+      if (opts.stats) opts.stats.longLinesSkipped += 1;
+      continue;
+    }
     if (!contentRe.test(line)) continue;
     if (filterFn && !filterFn(line)) continue;
     out.push({ line: i + 1, text: line });
