@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0](https://github.com/pdogra1299/bitbucket-mcp-server/compare/v3.0.1...v4.0.0) (2026-10-26)
+
+### ⚠ BREAKING CHANGES
+
+* Node.js 22 or newer is required (18 and 20 are end-of-life).
+* attachment uploads are disabled until BITBUCKET_ATTACHMENT_ROOT names the only directory they may read from.
+* grep/search_code regexes with a quantified group that contains another quantifier (e.g. `(\d+\s*)+`) are rejected with a rewrite hint.
+
+### Bug Fixes
+
+* harden against path steering, file exfiltration, ReDoS and token leaks ([8cc9495](https://github.com/pdogra1299/bitbucket-mcp-server/commit/8cc949532a53d99798bf7db66b0c9721a2b0b3b5))
+
 ## [3.0.1](https://github.com/pdogra1299/bitbucket-mcp-server/compare/v3.0.0...v3.0.1) (2026-09-26)
 
 ### Bug Fixes
