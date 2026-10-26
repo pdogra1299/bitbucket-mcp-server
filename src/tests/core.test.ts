@@ -7,6 +7,9 @@ import { buildQueryFromClauses, quoteIfNeeded } from '../core/query-budget.js';
 import { LineScanner } from '../core/snapshot.js';
 import { truncateMarked, compactObject, isoDate, isCommitRev, toEpochMillis, serverPage } from '../formatting/respond.js';
 import { isPosInt, optNonNegInt } from '../tools/guards.js';
+import { BitbucketApiClient, cloudNameFilter, CLOUD_MAX_PAGELEN, CLOUD_MAX_PAGELEN_PR_LIST } from '../core/api-client.js';
+import { loadConfig } from '../config/index.js';
+import { PullRequestHandlers } from '../handlers/pull-request-handlers.js';
 
 // ── throttle ─────────────────────────────────────────────────────────────────
 
@@ -227,4 +230,46 @@ test('truncateMarked marks, compactObject drops empties, isoDate normalizes', ()
   assert.deepEqual(compactObject({ a: 1, b: undefined, c: null, d: '' }), { a: 1 });
   assert.equal(isoDate(0), '1970-01-01T00:00:00.000Z');
   assert.equal(isoDate('not-a-date'), undefined);
+});
+
+// ── Cloud query and paging limits ────────────────────────────────────────────
+
+test('cloudNameFilter: builds a q clause and escapes the value', () => {
+  assert.equal(cloudNameFilter('widget'), 'name ~ "widget"');
+  // A quote would otherwise close the expression early and malform the query.
+  assert.equal(cloudNameFilter('say "hi"'), 'name ~ "say \\"hi\\""');
+  // Backslashes escape first, so the quote escape cannot be neutralised.
+  assert.equal(cloudNameFilter('back\\slash'), 'name ~ "back\\\\slash"');
+  assert.equal(cloudNameFilter(''), 'name ~ ""');
+});
+
+test('cloud pagelen ceilings: the PR list is lower than the rest', () => {
+  // Measured against api.bitbucket.org: /src, /commits and /refs/branches
+  // accept 100 and reject 101, while /pullrequests accepts 50 and rejects 51.
+  assert.equal(CLOUD_MAX_PAGELEN, 100);
+  assert.equal(CLOUD_MAX_PAGELEN_PR_LIST, 50);
+  assert.ok(CLOUD_MAX_PAGELEN_PR_LIST < CLOUD_MAX_PAGELEN);
+});
+
+test('list_pr_commits on Cloud follows same-origin next links and refuses others', async () => {
+  const cfg = loadConfig({ BITBUCKET_USERNAME: 'u', BITBUCKET_APP_PASSWORD: 'p' });
+  const client = new BitbucketApiClient(cfg);
+  const commit = (hash: string) => ({ hash, message: 'm', date: '2026-01-01T00:00:00Z', author: { raw: 'a' }, parents: [] });
+  const pages: Record<string, any> = {
+    '/repositories/w/r/pullrequests/1/commits': { values: [commit('a1')], next: 'https://api.bitbucket.org/2.0/repositories/w/r/pullrequests/1/commits?page=x' },
+    'https://api.bitbucket.org/2.0/repositories/w/r/pullrequests/1/commits?page=x': { values: [commit('b2')], next: 'https://evil.example/steal' },
+  };
+  const requested: string[] = [];
+  (client as any).makeRequest = async (_method: string, url: string) => {
+    requested.push(url);
+    if (!(url in pages)) throw new Error(`unexpected request to ${url}`);
+    return pages[url];
+  };
+  const handlers = new PullRequestHandlers(client, cfg.auth.baseUrl);
+  const res = await handlers.handleListPrCommits({ workspace: 'w', repository: 'r', pull_request_id: 1, limit: 5 });
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(requested, Object.keys(pages));
+  const body = JSON.parse(res.content[0].text as string);
+  assert.equal(body.commits.length, 2);
+  assert.equal(body.has_more, true, 'a refused next still means more exists');
 });
