@@ -11,8 +11,9 @@ import type {
   RepoSnapshot,
   SnapshotOmittedFile,
 } from '../types/index.js';
-import { BitbucketApiClient, encodeRepoPath } from './api-client.js';
+import { BitbucketApiClient } from './api-client.js';
 import { BlobStore, ByteBudgetLru } from './cache.js';
+import { encodeRepoPath, encodeSegment } from './paths.js';
 
 // RepoSnapshot engine — the in-memory "virtual checkout" behind grep.
 //
@@ -43,6 +44,8 @@ export type GrepRequest = {
   maxMatches: number;
   /** Context lines around each match. */
   contextLines: number;
+  /** Epoch-ms wall-clock deadline; past it the scan stops and results are returned PARTIAL, marked. */
+  deadlineAt?: number;
 };
 
 export type GrepEngineOutcome = {
@@ -67,12 +70,15 @@ export class LineScanner {
   private ring: Array<[number, string]> = [];
   private pendingAfter: Array<{ match: GrepMatch; remaining: number }> = [];
   matchCount = 0;
+  /** Lines longer than maxScanLineLength: counted, never handed to the regex. */
+  longLinesSkipped = 0;
 
   constructor(
     private readonly regex: RegExp,
     private readonly contextLines: number,
     private readonly maxLineLength: number,
-    private readonly collect: ScannerMatchSink | null
+    private readonly collect: ScannerMatchSink | null,
+    private readonly maxScanLineLength: number = Infinity
   ) {}
 
   feed(chunk: string): void {
@@ -98,7 +104,13 @@ export class LineScanner {
     }
     this.pendingAfter = this.pendingAfter.filter(p => p.remaining > 0);
 
-    if (this.regex.test(line)) {
+    let matched = false;
+    if (line.length > this.maxScanLineLength) {
+      this.longLinesSkipped += 1;
+    } else {
+      matched = this.regex.test(line);
+    }
+    if (matched) {
       this.matchCount += 1;
       if (this.collect) {
         const match: GrepMatch = { line: this.lineNo, text: this.display(line) };
@@ -177,6 +189,7 @@ export class RepoSnapshotStore {
     let totalCollected = 0;
     let totalMatches = 0;
     let filesScanned = 0;
+    let longLinesSkipped = 0;
 
     const scanText = (path: string, text: string): void => {
       const collected: GrepMatch[] = [];
@@ -191,12 +204,14 @@ export class RepoSnapshotStore {
                 totalCollected += 1;
               }
             }
-          : null
+          : null,
+        this.config.grep.maxScanLineChars
       );
       scanner.feed(text);
       scanner.end();
       filesScanned += 1;
       totalMatches += scanner.matchCount;
+      longLinesSkipped += scanner.longLinesSkipped;
       if (scanner.matchCount > 0) {
         results.push({ path, matches: collected, count: scanner.matchCount });
       }
@@ -204,6 +219,10 @@ export class RepoSnapshotStore {
 
     for (const [path, entry] of snap.files) {
       if (!this.globMatch(path, req.glob)) continue;
+      if (req.deadlineAt !== undefined && Date.now() > req.deadlineAt) {
+        warnings.push(this.timeoutWarning());
+        return this.partialWarm(sha, results, totalMatches, filesScanned, longLinesSkipped, warnings);
+      }
       const buf = this.blobs.get(entry.hash);
       if (!buf) continue; // defensive: evicted blob
       scanText(path, buf.toString('utf8'));
@@ -218,6 +237,10 @@ export class RepoSnapshotStore {
     }
     if (omittedMatching.length > 0) {
       for (const omitted of omittedMatching) {
+        if (req.deadlineAt !== undefined && Date.now() > req.deadlineAt) {
+          warnings.push(this.timeoutWarning());
+          return this.partialWarm(sha, results, totalMatches, filesScanned, longLinesSkipped, warnings);
+        }
         try {
           const text = await this.fetchRaw(req.project, req.repository, omitted.path, sha);
           scanText(omitted.path, text);
@@ -230,9 +253,7 @@ export class RepoSnapshotStore {
       }
     }
 
-    if (snap.binaryPaths.length > 0) {
-      // Reported by the caller via binariesSkipped; no warning spam here.
-    }
+    if (longLinesSkipped > 0) warnings.push(this.longLineWarning(longLinesSkipped));
 
     results.sort((a, b) => a.path.localeCompare(b.path));
     return {
@@ -244,6 +265,19 @@ export class RepoSnapshotStore {
       binariesSkipped: snap.binaryPaths.filter(p => this.globMatch(p, req.glob)).length,
       warnings,
     };
+  }
+
+  private partialWarm(
+    sha: string,
+    results: GrepFileResult[],
+    totalMatches: number,
+    filesScanned: number,
+    longLinesSkipped: number,
+    warnings: string[]
+  ): GrepEngineOutcome {
+    if (longLinesSkipped > 0) warnings.push(this.longLineWarning(longLinesSkipped));
+    results.sort((a, b) => a.path.localeCompare(b.path));
+    return { sha, engine: 'snapshot', results, totalMatches, filesScanned, binariesSkipped: 0, warnings };
   }
 
   // ── Cold path: stream the archive, scan everything, retain what fits ──────
@@ -259,6 +293,7 @@ export class RepoSnapshotStore {
     const results = new Map<string, GrepFileResult>();
     let totalCollected = 0;
     let totalMatches = 0;
+    let longLinesSkipped = 0;
 
     const stats: ArchiveScanStats = { filesSeen: 0, textFiles: 0, binaryFiles: 0, extractedBytes: 0, aborted: false };
 
@@ -319,22 +354,34 @@ export class RepoSnapshotStore {
           const ensureScanner = () => {
             if (!scanner) {
               decoder = new StringDecoder('utf8');
-              scanner = new LineScanner(req.regex, req.contextLines, this.config.grep.maxLineLength, m => {
-                if (totalCollected < req.maxMatches) {
-                  collected.push(m);
-                  totalCollected += 1;
-                }
-              });
+              scanner = new LineScanner(
+                req.regex,
+                req.contextLines,
+                this.config.grep.maxLineLength,
+                m => {
+                  if (totalCollected < req.maxMatches) {
+                    collected.push(m);
+                    totalCollected += 1;
+                  }
+                },
+                this.config.grep.maxScanLineChars
+              );
             }
             return scanner;
           };
 
-          entryStream.on('data', (chunk: Buffer) => {
+          entryStream.on('data', (data: unknown) => {
+            const chunk = data as Buffer;
             fileBytes += chunk.length;
             stats.extractedBytes += chunk.length;
             if (stats.extractedBytes > abortBytes) {
               stats.aborted = true;
               fail(new ArchiveAbortError(stats.extractedBytes));
+              return;
+            }
+            if (req.deadlineAt !== undefined && Date.now() > req.deadlineAt) {
+              stats.aborted = true;
+              fail(new ScanTimeoutError());
               return;
             }
             if (!sniffed) {
@@ -403,6 +450,7 @@ export class RepoSnapshotStore {
               if (scanner) {
                 const s = scanner as LineScanner;
                 totalMatches += s.matchCount;
+                longLinesSkipped += s.longLinesSkipped;
                 if (s.matchCount > 0) {
                   results.set(path, { path, matches: collected, count: s.matchCount });
                 }
@@ -425,6 +473,8 @@ export class RepoSnapshotStore {
           `SCAN_ABORTED: archive stream exceeded ${cfg.streamAbortMb} MB extracted (BITBUCKET_STREAM_ABORT_MB); ` +
             `matches found so far are returned but coverage is INCOMPLETE. Narrow with a path prefix or raise the cap.`
         );
+      } else if (err instanceof ScanTimeoutError) {
+        warnings.push(this.timeoutWarning());
       } else {
         throw err;
       }
@@ -463,6 +513,7 @@ export class RepoSnapshotStore {
       this.lru.set(key, snap);
     }
 
+    if (longLinesSkipped > 0) warnings.push(this.longLineWarning(longLinesSkipped));
     const resultList = [...results.values()].sort((a, b) => a.path.localeCompare(b.path));
     return {
       sha,
@@ -488,10 +539,24 @@ export class RepoSnapshotStore {
     return { sha, paths: snap.allPaths };
   }
 
+  private longLineWarning(count: number): string {
+    return (
+      `LONG_LINES_SKIPPED: ${count} line(s) longer than ${this.config.grep.maxScanLineChars} chars were not scanned ` +
+      `(minified/generated content?). Raise BITBUCKET_GREP_MAX_SCAN_LINE_CHARS to include them.`
+    );
+  }
+
+  private timeoutWarning(): string {
+    return (
+      `SCAN_TIMEOUT: the scan exceeded ${this.config.grep.scanTimeoutMs} ms (BITBUCKET_GREP_TIMEOUT_MS); ` +
+      `matches found so far are returned but coverage is INCOMPLETE. Narrow with glob/path or simplify the pattern.`
+    );
+  }
+
   private async fetchRaw(project: string, repository: string, filePath: string, atSha: string): Promise<string> {
     return this.client.makeRequest<string>(
       'get',
-      `/rest/api/latest/projects/${project}/repos/${repository}/raw/${encodeRepoPath(filePath)}`,
+      `/rest/api/latest/projects/${encodeSegment(project, 'workspace')}/repos/${encodeSegment(repository, 'repository')}/raw/${encodeRepoPath(filePath)}`,
       undefined,
       { params: { at: atSha }, responseType: 'text', headers: { Accept: 'text/plain' } }
     );
@@ -508,6 +573,12 @@ export class RepoSnapshotStore {
 class ArchiveAbortError extends Error {
   constructor(public readonly extractedBytes: number) {
     super('archive scan aborted at size cap');
+  }
+}
+
+class ScanTimeoutError extends Error {
+  constructor() {
+    super('scan aborted at wall-clock deadline');
   }
 }
 

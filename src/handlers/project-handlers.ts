@@ -1,5 +1,6 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { BitbucketApiClient } from '../core/api-client.js';
+import { encodeSegment } from '../core/paths.js';
 import { isListProjectsArgs, isListRepositoriesArgs } from '../tools/guards.js';
 import { compactObject, errorContent, jsonContent, serverPage } from '../formatting/respond.js';
 import type { ToolResponse } from '../types/index.js';
@@ -64,7 +65,7 @@ export class ProjectHandlers {
 
     try {
       if (this.apiClient.getIsServer()) {
-        const apiPath = workspace ? `/rest/api/1.0/projects/${workspace}/repos` : '/rest/api/1.0/repos';
+        const apiPath = workspace ? `/rest/api/1.0/projects/${encodeSegment(workspace, 'workspace')}/repos` : '/rest/api/1.0/repos';
         const params: any = { limit, start };
         if (name) params.name = name;
         if (permission) params.permission = permission;
@@ -89,7 +90,7 @@ export class ProjectHandlers {
       if (!workspace) {
         return errorContent('Bitbucket Cloud requires a workspace parameter to list repositories.');
       }
-      const response = await this.apiClient.makeRequest<any>('get', `/repositories/${workspace}`, undefined, {
+      const response = await this.apiClient.makeRequest<any>('get', `/repositories/${encodeSegment(workspace, 'workspace')}`, undefined, {
         params: { pagelen: limit, page: Math.floor(start / limit) + 1 },
       });
       const repositories = (response.values || []).map((r: any) =>

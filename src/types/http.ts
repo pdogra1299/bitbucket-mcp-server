@@ -1,13 +1,31 @@
-import type { AxiosError } from 'axios';
-
 // HTTP-layer types shared by the API client and handlers.
 
+/**
+ * Normalized transport error. Deliberately NOT the axios error: that object
+ * carries the request config (Authorization header included), so handlers
+ * only ever see status, message and response headers.
+ */
 export type ApiError = {
   status?: number;
   message: string;
   isAxiosError: boolean;
-  originalError?: AxiosError;
+  /** Response headers (lower-cased names) when a response was received. */
+  headers?: Record<string, unknown>;
 };
+
+/** A local file that passed the attachment-root/size/type checks. */
+export type ResolvedLocalFile = {
+  /** Real (symlink-resolved) absolute path. */
+  path: string;
+  size: number;
+  /** Device/inode at validation time; the upload re-checks them on the open fd. */
+  dev: number;
+  ino: number;
+  /** Sanitized basename sent as the multipart filename. */
+  name: string;
+};
+
+export type LocalFileResolution = { ok: true; file: ResolvedLocalFile } | { ok: false; error: string };
 
 export type AttachmentRender = 'image' | 'link' | 'auto';
 

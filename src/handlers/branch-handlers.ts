@@ -1,5 +1,7 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { BitbucketApiClient, encodeRepoPath } from '../core/api-client.js';
+import { BitbucketApiClient } from '../core/api-client.js';
+import { encodeRepoPath, encodeSegment } from '../core/paths.js';
+import { isProtectedBranch } from '../core/access.js';
 import {
   isListBranchesArgs,
   isDeleteBranchArgs,
@@ -35,6 +37,21 @@ export class BranchHandlers {
     return this.apiClient.getConfig();
   }
 
+  private repoBase(api: 'latest' | '1.0' | 'cloud' | 'branch-utils', workspace: string, repository: string): string {
+    const w = encodeSegment(workspace, 'workspace');
+    const r = encodeSegment(repository, 'repository');
+    switch (api) {
+      case 'cloud':
+        return `/repositories/${w}/${r}`;
+      case 'branch-utils':
+        return `/rest/branch-utils/latest/projects/${w}/repos/${r}`;
+      case '1.0':
+        return `/rest/api/1.0/projects/${w}/repos/${r}`;
+      default:
+        return `/rest/api/latest/projects/${w}/repos/${r}`;
+    }
+  }
+
   // ── list_branches ──────────────────────────────────────────────────────────
 
   async handleListBranches(args: any): Promise<ToolResponse> {
@@ -53,7 +70,7 @@ export class BranchHandlers {
       if (this.apiClient.getIsServer()) {
         const response = await this.apiClient.makeRequest<any>(
           'get',
-          `/rest/api/latest/projects/${workspace}/repos/${repository}/branches`,
+          `${this.repoBase('latest', workspace, repository)}/branches`,
           undefined,
           { params: { limit, start, details: true, orderBy: 'MODIFICATION', ...(filter ? { filterText: filter } : {}) } }
         );
@@ -68,7 +85,7 @@ export class BranchHandlers {
       } else {
         const response = await this.apiClient.makeRequest<any>(
           'get',
-          `/repositories/${workspace}/${repository}/refs/branches`,
+          `${this.repoBase('cloud', workspace, repository)}/refs/branches`,
           undefined,
           { params: { pagelen: limit, page: Math.floor(start / limit) + 1, ...(filter ? { q: `name ~ "${filter}"` } : {}) } }
         );
@@ -98,7 +115,7 @@ export class BranchHandlers {
       if (this.apiClient.getIsServer()) {
         const response = await this.apiClient.makeRequest<any>(
           'get',
-          `/rest/api/latest/projects/${workspace}/repos/${repository}/branches`,
+          `${this.repoBase('latest', workspace, repository)}/branches`,
           undefined,
           { params: { filterText: branch_name, limit: this.cfg.pagination.branchLookupLimit, details: true, boostMatches: true } }
         );
@@ -118,7 +135,7 @@ export class BranchHandlers {
       } else {
         const branch = await this.apiClient.makeRequest<any>(
           'get',
-          `/repositories/${workspace}/${repository}/refs/branches/${encodeURIComponent(branch_name)}`
+          `${this.repoBase('cloud', workspace, repository)}/refs/branches/${encodeSegment(branch_name, 'branch_name')}`
         );
         branchInfo = compactObject({
           name: branch.name,
@@ -155,7 +172,7 @@ export class BranchHandlers {
     if (this.apiClient.getIsServer()) {
       const response = await this.apiClient.makeRequest<any>(
         'get',
-        `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests`,
+        `${this.repoBase('1.0', workspace, repository)}/pull-requests`,
         undefined,
         { params: { state, direction: 'OUTGOING', at: `refs/heads/${branchName}`, limit } }
       );
@@ -173,7 +190,7 @@ export class BranchHandlers {
     }
     const response = await this.apiClient.makeRequest<any>(
       'get',
-      `/repositories/${workspace}/${repository}/pullrequests`,
+      `${this.repoBase('cloud', workspace, repository)}/pullrequests`,
       undefined,
       { params: { state, q: `source.branch.name="${branchName}"`, pagelen: limit } }
     );
@@ -195,6 +212,11 @@ export class BranchHandlers {
       throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for delete_branch');
     }
     const { workspace, repository, branch_name, expected_head } = args;
+    if (isProtectedBranch(branch_name, this.cfg.access.protectedBranches)) {
+      return errorContent(
+        `Refused: '${branch_name}' is a protected branch (BITBUCKET_PROTECTED_BRANCHES). Delete it through Bitbucket directly.`
+      );
+    }
 
     try {
       if (this.apiClient.getIsServer()) {
@@ -204,7 +226,7 @@ export class BranchHandlers {
         if (!endPoint) {
           const response = await this.apiClient.makeRequest<any>(
             'get',
-            `/rest/api/latest/projects/${workspace}/repos/${repository}/branches`,
+            `${this.repoBase('latest', workspace, repository)}/branches`,
             undefined,
             { params: { filterText: branch_name, limit: this.cfg.pagination.branchLookupLimit, boostMatches: true } }
           );
@@ -215,23 +237,19 @@ export class BranchHandlers {
         try {
           await this.apiClient.makeRequest<any>(
             'delete',
-            `/rest/branch-utils/latest/projects/${workspace}/repos/${repository}/branches`,
+            `${this.repoBase('branch-utils', workspace, repository)}/branches`,
             { name: branch_name, endPoint }
           );
         } catch (deleteError: any) {
           // 204 No Content parses as an "empty response" error in some stacks.
-          const ok =
-            deleteError.originalError?.response?.status === 204 ||
-            deleteError.message?.includes('No content to map');
+          const ok = deleteError.status === 204 || deleteError.message?.includes('No content to map');
           if (!ok) throw deleteError;
         }
       } else {
         try {
-          await this.apiClient.makeRequest<any>('delete', `/repositories/${workspace}/${repository}/refs/branches/${encodeURIComponent(branch_name)}`);
+          await this.apiClient.makeRequest<any>('delete', `${this.repoBase('cloud', workspace, repository)}/refs/branches/${encodeSegment(branch_name, 'branch_name')}`);
         } catch (deleteError: any) {
-          const ok =
-            deleteError.originalError?.response?.status === 204 ||
-            deleteError.message?.includes('No content to map');
+          const ok = deleteError.status === 204 || deleteError.message?.includes('No content to map');
           if (!ok) throw deleteError;
         }
       }
@@ -284,7 +302,7 @@ export class BranchHandlers {
         pages: for (let page = 0; page < maxPages; page++) {
           const response = await this.apiClient.makeRequest<any>(
             'get',
-            `/rest/api/1.0/projects/${workspace}/repos/${repository}/commits`,
+            `${this.repoBase('1.0', workspace, repository)}/commits`,
             undefined,
             { params: { ...params, start: pageStart } }
           );
@@ -320,7 +338,7 @@ export class BranchHandlers {
         const params: any = { pagelen: limit, page: Math.floor(start / limit) + 1 };
         const response = await this.apiClient.makeRequest<any>(
           'get',
-          `/repositories/${workspace}/${repository}/commits/${encodeURIComponent(branch_name)}`,
+          `${this.repoBase('cloud', workspace, repository)}/commits/${encodeSegment(branch_name, 'branch_name')}`,
           undefined,
           { params }
         );
@@ -389,7 +407,7 @@ export class BranchHandlers {
         if (this.apiClient.getIsServer()) {
           const response = await this.apiClient.makeRequest<any>(
             'get',
-            `/rest/api/1.0/projects/${workspace}/repos/${repository}/commits/${commit_id}/changes`,
+            `${this.repoBase('1.0', workspace, repository)}/commits/${encodeSegment(commit_id, 'commit_id')}/changes`,
             undefined,
             { params: { limit: this.cfg.pagination.changesLimit, withComments: false } }
           );
@@ -411,7 +429,7 @@ export class BranchHandlers {
         // Cloud: diffstat gives the same body-less file list.
         const response = await this.apiClient.makeRequest<any>(
           'get',
-          `/repositories/${workspace}/${repository}/diffstat/${commit_id}`,
+          `${this.repoBase('cloud', workspace, repository)}/diffstat/${encodeSegment(commit_id, 'commit_id')}`,
           undefined,
           { params: { pagelen: this.cfg.pagination.cloudCommentsPageLen } }
         );
@@ -429,7 +447,7 @@ export class BranchHandlers {
 
       let rawDiff: string;
       if (this.apiClient.getIsServer()) {
-        let apiPath = `/rest/api/1.0/projects/${workspace}/repos/${repository}/commits/${commit_id}/diff`;
+        let apiPath = `${this.repoBase('1.0', workspace, repository)}/commits/${encodeSegment(commit_id, 'commit_id')}/diff`;
         if (file_path) apiPath += `/${encodeRepoPath(file_path)}`;
         rawDiff = await this.apiClient.makeRequest<string>('get', apiPath, undefined, {
           params: { contextLines: context_lines },
@@ -439,7 +457,7 @@ export class BranchHandlers {
       } else {
         rawDiff = await this.apiClient.makeRequest<string>(
           'get',
-          `/repositories/${workspace}/${repository}/diff/${commit_id}`,
+          `${this.repoBase('cloud', workspace, repository)}/diff/${encodeSegment(commit_id, 'commit_id')}`,
           undefined,
           { params: { context: context_lines, ...(file_path ? { path: file_path } : {}) }, headers: { Accept: 'text/plain' }, responseType: 'text' }
         );

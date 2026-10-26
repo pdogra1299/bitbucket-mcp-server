@@ -1,6 +1,8 @@
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
-import { existsSync } from 'fs';
-import { BitbucketApiClient, encodeRepoPath } from '../core/api-client.js';
+import { BitbucketApiClient } from '../core/api-client.js';
+import { encodeRepoPath, encodeSegment } from '../core/paths.js';
+import { resolveAttachmentFile } from '../core/local-files.js';
+import { isProtectedBranch } from '../core/access.js';
 import {
   formatServerPullRequest,
   formatCloudPullRequest,
@@ -14,7 +16,6 @@ import { formatSuggestionComment } from '../formatting/suggestion-formatter.js';
 import { appendAttachments, buildAttachmentMarkup } from '../formatting/attachment-formatter.js';
 import { DiffParser } from '../formatting/diff-parser.js';
 import {
-  capDetails,
   compactObject,
   errorContent,
   isoDate,
@@ -68,11 +69,13 @@ export class PullRequestHandlers {
   }
 
   private serverPrPath(workspace: string, repository: string, id?: number): string {
-    return `/rest/api/1.0/projects/${workspace}/repos/${repository}/pull-requests${id !== undefined ? `/${id}` : ''}`;
+    const base = `/rest/api/1.0/projects/${encodeSegment(workspace, 'workspace')}/repos/${encodeSegment(repository, 'repository')}/pull-requests`;
+    return id !== undefined ? `${base}/${encodeSegment(String(id), 'pull_request_id')}` : base;
   }
 
   private cloudPrPath(workspace: string, repository: string, id?: number): string {
-    return `/repositories/${workspace}/${repository}/pullrequests${id !== undefined ? `/${id}` : ''}`;
+    const base = `/repositories/${encodeSegment(workspace, 'workspace')}/${encodeSegment(repository, 'repository')}/pullrequests`;
+    return id !== undefined ? `${base}/${encodeSegment(String(id), 'pull_request_id')}` : base;
   }
 
   // ── Attachments (upload + embed) ───────────────────────────────────────────
@@ -94,8 +97,11 @@ export class PullRequestHandlers {
       const altText = typeof item === 'string' ? undefined : item.alt_text;
       const render = typeof item === 'string' ? 'auto' : item.render || 'auto';
       if (!filePath) throw new McpError(ErrorCode.InvalidParams, 'Each attachment requires a file_path');
-      if (!existsSync(filePath)) throw new McpError(ErrorCode.InvalidParams, `Attachment file not found: ${filePath}`);
-      const uploaded = await this.apiClient.uploadAttachment(workspace, repository, filePath);
+      // Root-confined, regular-file, size-capped; one generic message so the
+      // tool cannot be used to probe the host filesystem.
+      const resolved = await resolveAttachmentFile(this.cfg.attachments, filePath);
+      if (!resolved.ok) throw new McpError(ErrorCode.InvalidParams, resolved.error);
+      const uploaded = await this.apiClient.uploadAttachment(workspace, repository, resolved.file);
       if (!uploaded.ref) {
         throw new McpError(ErrorCode.InternalError, `Attachment "${uploaded.name}" uploaded but no reference returned`);
       }
@@ -370,7 +376,12 @@ export class PullRequestHandlers {
     }
   }
 
-  /** Follow Cloud `next` cursors up to a bounded page count. */
+  /**
+   * Follow Cloud `next` cursors up to a bounded page count. `next` is an
+   * absolute URL that axios would follow verbatim with credentials attached,
+   * so only same-origin continuations are followed; anything else ends the
+   * walk and is reported as truncation.
+   */
   private async fetchCloudPages(firstPath: string, params: any): Promise<{ values: any[]; truncated: boolean }> {
     const values: any[] = [];
     let url: string | null = firstPath;
@@ -378,9 +389,10 @@ export class PullRequestHandlers {
     for (let page = 0; page < this.cfg.pagination.activitiesMaxPages && url; page++) {
       const response: any = await this.apiClient.makeRequest<any>('get', url, undefined, reqParams ? { params: reqParams } : undefined);
       values.push(...(response.values || []));
-      url = response.next || null; // absolute URL; axios overrides baseURL
       reqParams = undefined;
-      if (!url) return { values, truncated: false };
+      if (!response.next) return { values, truncated: false };
+      url = this.apiClient.safeNextUrl(response.next);
+      if (!url) return { values, truncated: true };
     }
     return { values, truncated: url !== null };
   }
@@ -685,11 +697,36 @@ export class PullRequestHandlers {
     const { workspace, repository, pull_request_id, merge_strategy, close_source_branch, commit_message } = args;
 
     try {
+      // Protected-branch denylist: needs the PR's target, so it costs one read
+      // (reused for the version on Server) only when the list is configured.
+      const protectedBranches = this.cfg.access.protectedBranches;
+      let prForPolicy: any;
+      if (protectedBranches.length > 0) {
+        const prPath = this.apiClient.getIsServer()
+          ? this.serverPrPath(workspace, repository, pull_request_id)
+          : this.cloudPrPath(workspace, repository, pull_request_id);
+        prForPolicy = await this.apiClient.makeRequest<any>('get', prPath);
+        const target: string | undefined = this.apiClient.getIsServer()
+          ? prForPolicy?.toRef?.displayId
+          : prForPolicy?.destination?.branch?.name;
+        if (!target) {
+          return errorContent(
+            `Refused: could not determine the target branch of pull request #${pull_request_id} to apply BITBUCKET_PROTECTED_BRANCHES.`
+          );
+        }
+        if (isProtectedBranch(target, protectedBranches)) {
+          return errorContent(
+            `Refused: pull request #${pull_request_id} targets protected branch '${target}' (BITBUCKET_PROTECTED_BRANCHES). Merge it through Bitbucket directly.`
+          );
+        }
+      }
+
       if (this.apiClient.getIsServer()) {
         const mergePath = `${this.serverPrPath(workspace, repository, pull_request_id)}/merge`;
         const requestBody: any = {
           version:
             args.version ??
+            prForPolicy?.version ??
             (await this.apiClient.makeRequest<any>('get', this.serverPrPath(workspace, repository, pull_request_id))).version,
         };
         if (commit_message) requestBody.message = commit_message;
@@ -771,8 +808,7 @@ export class PullRequestHandlers {
       if (error?.isAxiosError) {
         return this.apiClient.handleApiError(error, `declining pull request ${pull_request_id} in ${workspace}/${repository}`) as ToolResponse;
       }
-      const details = capDetails(error?.response?.data, this.cfg.output.errorDetailsMax);
-      return errorContent(`Failed to decline pull request: ${error?.message ?? error}${details ? `\ndetails: ${details}` : ''}`);
+      return errorContent(`Failed to decline pull request: ${error?.message ?? String(error)}`);
     }
   }
 
@@ -863,7 +899,7 @@ export class PullRequestHandlers {
 
     try {
       if (!isServer) {
-        const cloudBase = `${this.cloudPrPath(workspace, repository, pull_request_id)}/comments/${comment_id}`;
+        const cloudBase = `${this.cloudPrPath(workspace, repository, pull_request_id)}/comments/${encodeSegment(String(comment_id), 'comment_id')}`;
         switch (action) {
           case 'delete':
             await this.apiClient.makeRequest('delete', cloudBase);
@@ -883,7 +919,7 @@ export class PullRequestHandlers {
         }
       }
 
-      const commentPath = `${this.serverPrPath(workspace, repository, pull_request_id)}/comments/${comment_id}`;
+      const commentPath = `${this.serverPrPath(workspace, repository, pull_request_id)}/comments/${encodeSegment(String(comment_id), 'comment_id')}`;
       const callerSuppliedVersion = typeof args.version === 'number';
       const getVersion = async (): Promise<number> =>
         args.version ?? (await this.apiClient.makeRequest<any>('get', commentPath)).version;

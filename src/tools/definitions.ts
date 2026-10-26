@@ -2,6 +2,12 @@ import type { ToolDefinition } from '../types/index.js';
 
 // v3 tool surface: 25 tools (was 33). Descriptions are deliberately terse —
 // every definition is context the LLM pays for on each turn.
+//
+// `mutates` is the access-control bit: BITBUCKET_READ_ONLY hides and refuses
+// every tool with mutates:true. `annotations` are MCP hints for clients
+// (readOnlyHint/destructiveHint) — advisory only, never a security boundary.
+// manage_attachments is the one mixed tool (download reads, delete writes):
+// it stays exposed read-only and the handler refuses `delete`.
 
 const W = { type: 'string', description: 'Project key (e.g., PROJ)' };
 const R = { type: 'string', description: 'Repository slug' };
@@ -45,6 +51,8 @@ export const toolDefinitions: ToolDefinition[] = [
       'Response carries `version` for follow-up mutations.',
     group: 'pr_core',
     availability: 'both',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -65,6 +73,8 @@ export const toolDefinitions: ToolDefinition[] = [
       'List pull requests in a repository. Omit `repository` (Server only) to list YOUR PRs across all repos in one call (filter with role).',
     group: 'pr_core',
     availability: 'both',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -84,6 +94,8 @@ export const toolDefinitions: ToolDefinition[] = [
     description: 'Create a pull request.',
     group: 'pr_core',
     availability: 'both',
+    mutates: true,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     inputSchema: {
       type: 'object',
       properties: {
@@ -106,6 +118,8 @@ export const toolDefinitions: ToolDefinition[] = [
       'Update a pull request. Reviewers/approvals are preserved unless `reviewers` is passed. Pass `version` (from get/list) to save a fetch.',
     group: 'pr_core',
     availability: 'both',
+    mutates: true,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -127,6 +141,8 @@ export const toolDefinitions: ToolDefinition[] = [
     description: 'Merge a pull request. Pass `version` to save a fetch.',
     group: 'pr_core',
     availability: 'both',
+    mutates: true,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
     inputSchema: {
       type: 'object',
       properties: {
@@ -146,6 +162,8 @@ export const toolDefinitions: ToolDefinition[] = [
     description: 'Decline a pull request, optionally with a comment. Pass `version` to save a fetch (Server).',
     group: 'pr_core',
     availability: 'both',
+    mutates: true,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -168,6 +186,8 @@ export const toolDefinitions: ToolDefinition[] = [
       'code_snippet auto-resolves line_number from exact diff text when line_number is unknown.',
     group: 'pr_comments',
     availability: 'both',
+    mutates: true,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     inputSchema: {
       type: 'object',
       properties: {
@@ -204,6 +224,8 @@ export const toolDefinitions: ToolDefinition[] = [
       'Pass `version` (from get_pull_request output) to save a fetch (Server).',
     group: 'pr_comments',
     availability: 'both',
+    mutates: true,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -227,6 +249,8 @@ export const toolDefinitions: ToolDefinition[] = [
       'Scope with file_path (server-side) or include/exclude glob patterns.',
     group: 'pr_review',
     availability: 'both',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -249,6 +273,8 @@ export const toolDefinitions: ToolDefinition[] = [
       'One call; the three states are mutually exclusive.',
     group: 'pr_review',
     availability: 'both',
+    mutates: true,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -268,6 +294,8 @@ export const toolDefinitions: ToolDefinition[] = [
     description: 'List commits in a pull request.',
     group: 'commits',
     availability: 'both',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -288,6 +316,8 @@ export const toolDefinitions: ToolDefinition[] = [
       'author/until/search and date-valued since filter client-side over a bounded page walk (noted when more pages exist).',
     group: 'commits',
     availability: 'both',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -312,6 +342,8 @@ export const toolDefinitions: ToolDefinition[] = [
       'Get a commit diff as raw unified diff text, or detail:"files" for just the changed-file list (no diff bodies).',
     group: 'commits',
     availability: 'both',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -334,6 +366,8 @@ export const toolDefinitions: ToolDefinition[] = [
     description: 'List branches (most recently modified first on Server).',
     group: 'branches',
     availability: 'both',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: { workspace: W, repository: R, filter: { type: 'string', description: 'Name filter' }, limit: LIMIT, start: START },
@@ -345,6 +379,8 @@ export const toolDefinitions: ToolDefinition[] = [
     description: 'Get a branch with its latest commit and open PRs (include_merged_prs adds merged ones).',
     group: 'branches',
     availability: 'both',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -361,6 +397,8 @@ export const toolDefinitions: ToolDefinition[] = [
     description: 'Delete a branch. Pass expected_head (commit SHA) to skip the lookup call (Server).',
     group: 'branches',
     availability: 'both',
+    mutates: true,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -379,6 +417,8 @@ export const toolDefinitions: ToolDefinition[] = [
     description: 'List files and directories at a repository path.',
     group: 'files',
     availability: 'both',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: { workspace: W, repository: R, path: { type: 'string', description: 'Default: root' }, branch: BRANCH },
@@ -392,6 +432,8 @@ export const toolDefinitions: ToolDefinition[] = [
       'full_content=true or negative start_line (tail) fetches the whole file — prefer windows.',
     group: 'files',
     availability: 'both',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -413,6 +455,8 @@ export const toolDefinitions: ToolDefinition[] = [
       'Pair commit ids with get_commit_detail. Server only.',
     group: 'files',
     availability: 'server_only',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -437,6 +481,8 @@ export const toolDefinitions: ToolDefinition[] = [
       'Scope with glob and/or path to keep scans fast. Server only.',
     group: 'search',
     availability: 'server_only',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -462,6 +508,8 @@ export const toolDefinitions: ToolDefinition[] = [
       'Best for cross-repo identifier lookups; for one repo, regex, or feature branches use grep.',
     group: 'search',
     availability: 'server_only',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -486,6 +534,8 @@ export const toolDefinitions: ToolDefinition[] = [
     description: 'Find repositories by name/description across the instance. Server only.',
     group: 'search',
     availability: 'server_only',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -504,6 +554,8 @@ export const toolDefinitions: ToolDefinition[] = [
       'Download or delete a repository attachment by numeric id (Server only). Upload via the attachments param on add_comment/create_pull_request/update_pull_request. No list API exists.',
     group: 'attachments',
     availability: 'server_only',
+    mutates: false,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -522,6 +574,8 @@ export const toolDefinitions: ToolDefinition[] = [
     description: 'List accessible projects/workspaces.',
     group: 'discovery',
     availability: 'both',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -538,6 +592,8 @@ export const toolDefinitions: ToolDefinition[] = [
     description: 'List repositories in a project (or all accessible on Server).',
     group: 'discovery',
     availability: 'both',
+    mutates: false,
+    annotations: { readOnlyHint: true },
     inputSchema: {
       type: 'object',
       properties: {

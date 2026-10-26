@@ -20,6 +20,20 @@ const optBool = (v: unknown): boolean => v === undefined || typeof v === 'boolea
 const optStrArr = (v: unknown): boolean =>
   v === undefined || (Array.isArray(v) && v.every(x => typeof x === 'string'));
 
+// Identifiers that become URL path segments are charset-validated here, so a
+// value like `PROJ/../../admin` or `repo?x=` can never re-route a request.
+// Covers DC project keys (PROJ, ~user), Cloud workspace slugs and {uuid}s,
+// and repo slugs. `/`, `?`, `#`, `%`, whitespace and control chars are out.
+const IDENT = /^[A-Za-z0-9~{._-][A-Za-z0-9._~{}@-]{0,254}$/;
+export const isIdent = (v: unknown): v is string =>
+  typeof v === 'string' && v !== '.' && v !== '..' && IDENT.test(v);
+const optIdent = (v: unknown): boolean => v === undefined || isIdent(v);
+/** Abbreviated or full commit hash (SHA-1 or SHA-256 repos). */
+export const isCommitId = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-fA-F]{7,64}$/.test(v);
+/** Bitbucket attachment ids are numeric. */
+export const isAttachmentId = (v: unknown): v is string | number =>
+  (typeof v === 'string' && /^\d{1,20}$/.test(v)) || isPosInt(v);
+
 function isAttachmentInput(v: unknown): v is AttachmentInput {
   if (typeof v === 'string') return true;
   return isObj(v) && str(v.file_path) && optStr(v.alt_text) &&
@@ -30,7 +44,7 @@ const optAttachments = (v: unknown): boolean =>
   v === undefined || (Array.isArray(v) && v.every(isAttachmentInput));
 
 function repoScoped(a: any): boolean {
-  return isObj(a) && str(a.workspace) && str(a.repository);
+  return isObj(a) && isIdent(a.workspace) && isIdent(a.repository);
 }
 
 // ── Pull requests ────────────────────────────────────────────────────────────
@@ -49,7 +63,7 @@ export function isListPullRequestsArgs(a: any): a is {
   workspace: string; repository?: string; state?: string; author?: string;
   role?: string; limit?: number; start?: number;
 } {
-  return isObj(a) && str(a.workspace) && optStr(a.repository) &&
+  return isObj(a) && isIdent(a.workspace) && optIdent(a.repository) &&
     (a.state === undefined || ['OPEN', 'MERGED', 'DECLINED', 'ALL'].includes(a.state as string)) &&
     optStr(a.author) &&
     (a.role === undefined || ['AUTHOR', 'REVIEWER', 'PARTICIPANT'].includes(a.role as string)) &&
@@ -190,7 +204,7 @@ export function isGetCommitDetailArgs(a: any): a is {
   context_lines?: number; include_patterns?: string[]; exclude_patterns?: string[];
   file_path?: string; detail?: 'diff' | 'files';
 } {
-  return repoScoped(a) && str(a.commit_id) && optNonNegInt(a.context_lines) &&
+  return repoScoped(a) && isCommitId(a.commit_id) && optNonNegInt(a.context_lines) &&
     optStrArr(a.include_patterns) && optStrArr(a.exclude_patterns) && optStr(a.file_path) &&
     (a.detail === undefined || ['diff', 'files'].includes(a.detail));
 }
@@ -230,8 +244,43 @@ export function isListProjectsArgs(a: any): a is {
 export function isListRepositoriesArgs(a: any): a is {
   workspace?: string; name?: string; permission?: string; limit?: number; start?: number;
 } {
-  return isObj(a) && optStr(a.workspace) && optStr(a.name) && optStr(a.permission) &&
+  return isObj(a) && optIdent(a.workspace) && optStr(a.name) && optStr(a.permission) &&
     optPosInt(a.limit) && optNonNegInt(a.start);
+}
+
+// ── Search ───────────────────────────────────────────────────────────────────
+
+export function isSearchCodeArgs(a: any): a is {
+  workspace: string; repository?: string; query?: string; lang?: string; ext?: string; path?: string;
+  exclude_terms?: string[]; archived?: 'true' | 'false' | '*'; fork?: 'true' | 'false';
+  regex_filter?: string; limit?: number; start?: number;
+  case_variants?: boolean; search_query?: string; search_context?: string;
+  include_patterns?: string[]; file_pattern?: string;
+} {
+  return isObj(a) && isIdent(a.workspace) && optIdent(a.repository) &&
+    optStr(a.query) && optStr(a.search_query) && optStr(a.lang) && optStr(a.ext) && optStr(a.path) &&
+    optStrArr(a.exclude_terms) &&
+    (a.archived === undefined || ['true', 'false', '*'].includes(a.archived as string)) &&
+    (a.fork === undefined || ['true', 'false'].includes(a.fork as string)) &&
+    optStr(a.regex_filter) && optPosInt(a.limit) && optNonNegInt(a.start) &&
+    optBool(a.case_variants) && optStr(a.search_context) && optStrArr(a.include_patterns) && optStr(a.file_pattern);
+}
+
+export function isSearchRepositoriesArgs(a: any): a is {
+  query?: string; search_query?: string; workspace?: string; limit?: number;
+} {
+  return isObj(a) && optStr(a.query) && optStr(a.search_query) && optIdent(a.workspace) && optPosInt(a.limit);
+}
+
+// ── grep ─────────────────────────────────────────────────────────────────────
+
+export function isGrepArgs(a: any): a is {
+  workspace: string; repository: string; query?: string; glob?: string; branch?: string; path?: string;
+  mode?: 'content' | 'files' | 'count'; case_insensitive?: boolean; context?: number; max_results?: number;
+} {
+  return repoScoped(a) && optStr(a.query) && optStr(a.glob) && optStr(a.branch) && optStr(a.path) &&
+    (a.mode === undefined || ['content', 'files', 'count'].includes(a.mode)) &&
+    optBool(a.case_insensitive) && optInt(a.context) && optInt(a.max_results);
 }
 
 // ── Attachments ──────────────────────────────────────────────────────────────
@@ -239,6 +288,5 @@ export function isListRepositoriesArgs(a: any): a is {
 export function isManageAttachmentsArgs(a: any): a is {
   workspace: string; repository: string; action: 'download' | 'delete'; attachment_id: string | number;
 } {
-  return repoScoped(a) && ['download', 'delete'].includes(a.action) &&
-    (typeof a.attachment_id === 'string' || typeof a.attachment_id === 'number');
+  return repoScoped(a) && ['download', 'delete'].includes(a.action) && isAttachmentId(a.attachment_id);
 }

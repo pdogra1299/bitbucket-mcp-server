@@ -99,6 +99,41 @@ export type ConfigGrep = {
   maxContext: number;
   /** Display truncation for a single match line (chars); truncation is marked. */
   maxLineLength: number;
+  /** Longest regex pattern accepted from a caller (chars). */
+  maxPatternLength: number;
+  /** Longest glob accepted from a caller (chars). */
+  maxGlobLength: number;
+  /** Budget for the adversarial-input probe a caller regex must pass (ms). */
+  regexProbeTimeoutMs: number;
+  /** Wall-clock budget for one content scan; exceeding it returns PARTIAL results, marked (ms). */
+  scanTimeoutMs: number;
+  /**
+   * Lines longer than this are not regex-scanned (counted and reported).
+   * A single regex test cannot be interrupted, and even benign patterns
+   * like `\s+$` are quadratic on a multi-MB minified line.
+   */
+  maxScanLineChars: number;
+};
+
+export type ConfigAccess = {
+  /** Hide and refuse every tool that mutates Bitbucket state (BITBUCKET_READ_ONLY). */
+  readOnly: boolean;
+  /** Tool names hidden and refused regardless of group (BITBUCKET_DISABLED_TOOLS). */
+  disabledTools: string[];
+  /** Branch names/globs that delete_branch and merge_pull_request refuse to touch (BITBUCKET_PROTECTED_BRANCHES). */
+  protectedBranches: string[];
+};
+
+export type ConfigAttachments = {
+  /**
+   * The ONLY directory attachment uploads may read from (BITBUCKET_ATTACHMENT_ROOT).
+   * Undefined = uploads disabled. Paths are realpath-resolved and must stay inside it.
+   */
+  uploadRoot?: string;
+  /** Max size of one uploaded attachment (MB). */
+  maxUploadMb: number;
+  /** Max size of one downloaded attachment (MB); larger downloads are refused. */
+  maxDownloadMb: number;
 };
 
 export type ConfigScanFallback = {
@@ -179,6 +214,8 @@ export type BitbucketMcpConfig = {
   scan: ConfigScanFallback;
   pagination: ConfigPagination;
   output: ConfigOutput;
+  access: ConfigAccess;
+  attachments: ConfigAttachments;
   /** Validated tool-group filter (BITBUCKET_TOOL_GROUPS); null = all groups. */
   toolGroups: string[] | null;
 };

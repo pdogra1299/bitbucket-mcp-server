@@ -22,7 +22,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [18, 20, 22]
+        # Node 18 and 20 are end-of-life; engines.node is >=22.
+        node: [22, 24]
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,6 +43,11 @@ jobs:
       # Runs node:test directly against the build above (`npm test` would rebuild).
       - name: Test
         run: node --test build/tests/*.test.js
+
+      # The published dependency tree must carry no high/critical advisories.
+      - name: Audit production dependencies
+        if: matrix.node == 22
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Verify package contents
         if: matrix.node == 22

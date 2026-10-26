@@ -57,3 +57,15 @@ export type DenseSearchResponse = {
     parallelism?: number;
   };
 };
+
+// ── Caller-supplied regex safety ─────────────────────────────────────────────
+
+export type SafeRegexOptions = {
+  flags?: string;
+  /** Longest pattern accepted (chars). */
+  maxLength: number;
+  /** vm timeout for the adversarial-input probe (ms). */
+  probeTimeoutMs: number;
+};
+
+export type SafeRegexResult = { ok: true; regex: RegExp } | { ok: false; reason: string };

@@ -5,7 +5,11 @@ import type {
   QueryClause,
   ToolResponse,
 } from '../types/index.js';
+import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import { BitbucketApiClient } from '../core/api-client.js';
+import { encodeSegment } from '../core/paths.js';
+import { compileSafeRegex } from '../core/safe-regex.js';
+import { isSearchCodeArgs, isSearchRepositoriesArgs } from '../tools/guards.js';
 import { listRepoFiles } from '../core/file-list.js';
 import {
   buildQueryFromClauses,
@@ -14,7 +18,7 @@ import {
   quoteIfNeeded,
 } from '../core/query-budget.js';
 import { buildDenseResponseFromIndex, renderSearchText } from '../formatting/formatters.js';
-import { capDetails, errorContent, textContent } from '../formatting/respond.js';
+import { errorContent, textContent } from '../formatting/respond.js';
 import { minimatch } from 'minimatch';
 
 // Index-backed search tools (Bitbucket Server only).
@@ -28,14 +32,17 @@ import { minimatch } from 'minimatch';
 //    steering text instead of a confusing server error.
 //  * Output is ripgrep-style text.
 
-function compileRegexFilter(pattern: string | undefined): ((line: string) => boolean) | undefined {
-  if (!pattern) return undefined;
-  try {
-    const re = new RegExp(pattern);
-    return (line: string) => re.test(line);
-  } catch {
-    return undefined;
-  }
+// regex_filter is caller-supplied and runs on every hit line — same ReDoS
+// guard as grep. A rejected filter is reported (and ignored), never run.
+function compileRegexFilter(
+  pattern: string | undefined,
+  opts: { maxLength: number; probeTimeoutMs: number }
+): { filter?: (line: string) => boolean; rejected?: string } {
+  if (!pattern) return {};
+  const compiled = compileSafeRegex(pattern, opts);
+  if (!compiled.ok) return { rejected: compiled.reason };
+  const re = compiled.regex;
+  return { filter: (line: string) => re.test(line) };
 }
 
 function extractBareExtension(filePattern: string | undefined): string | null {
@@ -74,6 +81,9 @@ export class SearchHandlers {
   constructor(private apiClient: BitbucketApiClient) {}
 
   async handleSearchCode(args: SearchCodeArgs): Promise<ToolResponse> {
+    if (!isSearchCodeArgs(args)) {
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for search_code');
+    }
     try {
       const cfg = this.apiClient.getConfig();
       const warnings: string[] = [];
@@ -145,9 +155,12 @@ export class SearchHandlers {
         );
       }
 
-      const postFilter = compileRegexFilter(args.regex_filter);
-      if (args.regex_filter && !postFilter) {
-        warnings.push('INVALID_REGEX: `regex_filter` could not be compiled and was ignored.');
+      const { filter: postFilter, rejected } = compileRegexFilter(args.regex_filter, {
+        maxLength: cfg.grep.maxPatternLength,
+        probeTimeoutMs: cfg.grep.regexProbeTimeoutMs,
+      });
+      if (rejected) {
+        warnings.push(`INVALID_REGEX: \`regex_filter\` was rejected (${rejected}) and ignored.`);
       }
 
       const primary = await this.runIndexedSearch(built.query, start, limit);
@@ -176,9 +189,10 @@ export class SearchHandlers {
 
       return this.renderIndexResponse(args, response, rawQuery, start, limit);
     } catch (error: any) {
-      const msg = error.response?.data?.errors?.[0]?.message || error.message;
-      const details = capDetails(error.response?.data, this.apiClient.getConfig().output.errorDetailsMax);
-      return errorContent(`Failed to search code: ${msg}${details ? `\ndetails: ${details}` : ''}`);
+      if (error?.isAxiosError) {
+        return this.apiClient.handleApiError(error, `searching code in ${args.workspace}`) as ToolResponse;
+      }
+      return errorContent(`Failed to search code: ${error?.message ?? String(error)}`);
     }
   }
 
@@ -201,7 +215,7 @@ export class SearchHandlers {
         : '';
       const listing = await this.apiClient.makeRequest<any>(
         'get',
-        `/rest/api/latest/projects/${args.workspace}/repos/${args.repository}/files${probePath}`,
+        `/rest/api/latest/projects/${encodeSegment(args.workspace, 'workspace')}/repos/${encodeSegment(args.repository!, 'repository')}/files${probePath}`,
         undefined,
         { params: { limit: probeLimit, start: 0 } }
       );
@@ -253,6 +267,9 @@ export class SearchHandlers {
   // ── search_repositories ────────────────────────────────────────────────────
 
   async handleSearchRepositories(args: any): Promise<ToolResponse> {
+    if (!isSearchRepositoriesArgs(args)) {
+      throw new McpError(ErrorCode.InvalidParams, 'Invalid arguments for search_repositories');
+    }
     try {
       const cfg = this.apiClient.getConfig();
       const { search_query, query, workspace } = args;
@@ -287,8 +304,10 @@ export class SearchHandlers {
       const header = `repositories matching "${term}"${workspace ? ` in ${workspace}` : ''} — ${repos.length} found${response.repositories?.isLastPage === false ? ' (more exist; refine the term)' : ''}`;
       return textContent([header, '', ...lines].join('\n'));
     } catch (error: any) {
-      const msg = error.response?.data?.errors?.[0]?.message || error.message;
-      return errorContent(`Failed to search repositories: ${msg}`);
+      if (error?.isAxiosError) {
+        return this.apiClient.handleApiError(error, 'searching repositories') as ToolResponse;
+      }
+      return errorContent(`Failed to search repositories: ${error?.message ?? String(error)}`);
     }
   }
 

@@ -1,6 +1,7 @@
 import type { FileListResult } from '../types/index.js';
 import { BitbucketApiClient } from './api-client.js';
 import { TtlMemo, InFlightCoalescer } from './cache.js';
+import { encodeRepoPath, encodeSegment } from './paths.js';
 
 // Repository file listing (Bitbucket Server /files endpoint).
 //
@@ -47,8 +48,8 @@ export async function listRepoFiles(
     const again = memo!.get(key);
     if (again) return again;
 
-    let apiPath = `/rest/api/latest/projects/${workspace}/repos/${repository}/files`;
-    if (opts.path) apiPath += `/${opts.path}`;
+    let apiPath = `/rest/api/latest/projects/${encodeSegment(workspace, 'workspace')}/repos/${encodeSegment(repository, 'repository')}/files`;
+    if (opts.path) apiPath += `/${encodeRepoPath(opts.path)}`;
 
     const files: string[] = [];
     let start = 0;
