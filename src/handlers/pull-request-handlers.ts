@@ -15,6 +15,7 @@ import {
 import { formatSuggestionComment } from '../formatting/suggestion-formatter.js';
 import { appendAttachments, buildAttachmentMarkup } from '../formatting/attachment-formatter.js';
 import { DiffParser } from '../formatting/diff-parser.js';
+import { CloudMember, CloudUserResolutionError, isCloudUuid, resolveCloudReviewers } from '../core/cloud-users.js';
 import {
   compactObject,
   errorContent,
@@ -58,6 +59,9 @@ import {
 //                        delete_comment + all PR-task mutation tools (DC tasks
 //                        ARE comments with severity=BLOCKER).
 
+// 20 pages of 100 members; a workspace past that should pass {uuid} reviewers.
+const CLOUD_MEMBER_MAX_PAGES = 20;
+
 export class PullRequestHandlers {
   constructor(
     private apiClient: BitbucketApiClient,
@@ -76,6 +80,29 @@ export class PullRequestHandlers {
   private cloudPrPath(workspace: string, repository: string, id?: number): string {
     const base = `/repositories/${encodeSegment(workspace, 'workspace')}/${encodeSegment(repository, 'repository')}/pullrequests`;
     return id !== undefined ? `${base}/${encodeSegment(String(id), 'pull_request_id')}` : base;
+  }
+
+  // ── Cloud reviewers ────────────────────────────────────────────────────────
+
+  // Resolves reviewer identifiers to `{ uuid }` (Cloud rejects `{ username }`).
+  // Members are only fetched when some identifier is not already a {uuid}.
+  private async cloudReviewers(workspace: string, reviewers: string[]): Promise<{ uuid: string }[]> {
+    const members: CloudMember[] = [];
+    if (reviewers.some((r) => !isCloudUuid(r))) {
+      for (let page = 1; page <= CLOUD_MEMBER_MAX_PAGES; page++) {
+        const res = await this.apiClient.makeRequest<any>('get', `/workspaces/${workspace}/members`, undefined, {
+          params: { pagelen: 100, page },
+        });
+        for (const m of res.values ?? []) if (m.user?.uuid) members.push(m.user);
+        if (!res.next) break;
+      }
+    }
+    try {
+      return resolveCloudReviewers(reviewers, members);
+    } catch (error) {
+      if (error instanceof CloudUserResolutionError) throw new McpError(ErrorCode.InvalidParams, error.message);
+      throw error;
+    }
   }
 
   // ── Attachments (upload + embed) ───────────────────────────────────────────
@@ -547,6 +574,9 @@ export class PullRequestHandlers {
     const { workspace, repository, title, source_branch, destination_branch, description, reviewers, close_source_branch, attachments } = args;
 
     try {
+      // Resolved first so an unknown reviewer fails before any attachment upload.
+      const cloudReviewers =
+        !this.apiClient.getIsServer() && reviewers?.length ? await this.cloudReviewers(workspace, reviewers) : [];
       const finalDescription = await this.uploadAndEmbed(workspace, repository, description || '', attachments);
       let apiPath: string;
       let requestBody: any;
@@ -568,7 +598,7 @@ export class PullRequestHandlers {
           source: { branch: { name: source_branch } },
           destination: { branch: { name: destination_branch } },
           close_source_branch: close_source_branch || false,
-          reviewers: reviewers?.map((r: string) => ({ username: r })) || [],
+          reviewers: cloudReviewers,
         };
       }
       const pr = await this.apiClient.makeRequest<any>('post', apiPath, requestBody);
@@ -644,12 +674,12 @@ export class PullRequestHandlers {
       // Cloud
       const apiPath = this.cloudPrPath(workspace, repository, pull_request_id);
       const requestBody: any = {};
+      if (reviewers !== undefined) requestBody.reviewers = await this.cloudReviewers(workspace, reviewers);
       if (title !== undefined) requestBody.title = title;
       if (attachments?.length || description !== undefined) {
         requestBody.description = await this.uploadAndEmbed(workspace, repository, description || '', attachments);
       }
       if (destination_branch !== undefined) requestBody.destination = { branch: { name: destination_branch } };
-      if (reviewers !== undefined) requestBody.reviewers = reviewers.map((r: string) => ({ username: r }));
       const pr = await this.apiClient.makeRequest<any>('put', apiPath, requestBody);
       return jsonContent(compactObject({ id: pr.id, state: pr.state, title: pr.title }));
     } catch (error) {
